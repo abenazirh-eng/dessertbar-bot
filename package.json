@@ -1,0 +1,13 @@
+{
+  "name": "dessertbar-telegram-bot",
+  "version": "1.0.0",
+  "description": "The Dessert Bar Telegram Bot",
+  "main": "telegram_bot.js",
+  "type": "module",
+  "scripts": {
+    "start": "node telegram_bot.js"
+  },
+  "dependencies": {
+    "node-fetch": "^3.3.2"
+  }
+}
