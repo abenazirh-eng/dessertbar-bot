@@ -1,6 +1,3 @@
-// The Dessert Bar — Telegram Bot
-// Handles both personal chat and group purchasing management
-
 const https = require('https');
 
 const BOT_TOKEN = '8787023077:AAFTmxyyOIBv3DK8V3Pes7FdTQx8cU_5oJY';
@@ -9,7 +6,7 @@ const GROUP_CHAT_ID = '-1004290700890';
 const SB_URL = 'ivhcimcudidwpnwmfvbd.supabase.co';
 const SB_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Iml2aGNpbWN1ZGlkd3Bud21mdmJkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODAzMTI0NTYsImV4cCI6MjA5NTg4ODQ1Nn0.0_rcL5LT0tpei47cIKgqPFfDivylvvP6jbUEgbzXFLE';
 
-// ── Weekly purchase schedule (from your Db_Weekly_inventory.docx) ──
+// Weekly purchase schedule
 const WEEKLY_SCHEDULE = {
   0: { day: 'Sunday',    items: ['Eggs', 'Chicken', 'Mozzarella Cheese'] },
   1: { day: 'Monday',    items: ['Chocolate', 'Tea Bags', 'Yo Creme'] },
@@ -17,8 +14,39 @@ const WEEKLY_SCHEDULE = {
   3: { day: 'Wednesday', items: ['Butter', 'Oil', 'Sugar Stick', 'Cacao Powder'] },
   4: { day: 'Thursday',  items: ['Sugar', 'Staff Meal Vegetables', 'Beef'] },
   5: { day: 'Friday',    items: ['Vegetables & Fruits', 'Smoked Salmon', 'Normal Salmon', 'Sausage'] },
-  6: { day: 'Saturday',  items: ['Water (Gold Water)', 'Sprite & Ambo Water'] },
+  6: { day: 'Saturday',  items: ['Water', 'Sprite & Ambo Water'] },
 };
+
+// All purchasable items with emojis and units
+const PURCHASE_ITEMS = [
+  { name: 'Milk',              emoji: '🥛', unit: 'L'   },
+  { name: 'Coffee',            emoji: '☕', unit: 'kg'  },
+  { name: 'Ice cream powder',  emoji: '🍦', unit: 'kg'  },
+  { name: 'Heavy cream',       emoji: '🧴', unit: 'ml'  },
+  { name: 'Eggs',              emoji: '🥚', unit: 'pcs' },
+  { name: 'Butter',            emoji: '🧈', unit: 'kg'  },
+  { name: 'Chicken',           emoji: '🍗', unit: 'kg'  },
+  { name: 'Beef',              emoji: '🥩', unit: 'kg'  },
+  { name: 'Salmon',            emoji: '🐟', unit: 'kg'  },
+  { name: 'Chocolate',         emoji: '🍫', unit: 'pcs' },
+  { name: 'Sugar',             emoji: '🍬', unit: 'kg'  },
+  { name: 'Flour',             emoji: '🌾', unit: 'kg'  },
+  { name: 'Creme Cheese',      emoji: '🧀', unit: 'kg'  },
+  { name: 'Mozzarella Cheese', emoji: '🧀', unit: 'kg'  },
+  { name: 'Vegetables',        emoji: '🥦', unit: 'kg'  },
+  { name: 'Fruits',            emoji: '🍓', unit: 'kg'  },
+  { name: 'Yo Creme',          emoji: '🥛', unit: 'L'   },
+  { name: 'Cacao Powder',      emoji: '🍫', unit: 'kg'  },
+  { name: 'Oil',               emoji: '🫙', unit: 'L'   },
+  { name: 'Honey',             emoji: '🍯', unit: 'kg'  },
+  { name: 'Tuna',              emoji: '🐟', unit: 'pcs' },
+  { name: 'Sausage',           emoji: '🌭', unit: 'pcs' },
+  { name: 'Water',             emoji: '💧', unit: 'pcs' },
+];
+
+// In-memory session state per user
+// State machine: 'select_item' -> 'enter_qty' -> 'enter_price' -> done
+const sessions = {};
 
 // ── HTTP helper ───────────────────────────────────────────────────
 function request(options, body = null) {
@@ -38,11 +66,23 @@ function request(options, body = null) {
 }
 
 // ── Telegram helpers ──────────────────────────────────────────────
-async function send(chatId, text, extra = {}) {
-  const body = JSON.stringify({ chat_id: chatId, text, parse_mode: 'HTML', ...extra });
+async function send(chatId, text, keyboard = null) {
+  const payload = { chat_id: chatId, text, parse_mode: 'HTML' };
+  if (keyboard) payload.reply_markup = keyboard;
+  const body = JSON.stringify(payload);
   return request({
     hostname: 'api.telegram.org',
     path: `/bot${BOT_TOKEN}/sendMessage`,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) }
+  }, body);
+}
+
+async function answerCallback(callbackQueryId, text = '') {
+  const body = JSON.stringify({ callback_query_id: callbackQueryId, text });
+  return request({
+    hostname: 'api.telegram.org',
+    path: `/bot${BOT_TOKEN}/answerCallbackQuery`,
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) }
   }, body);
@@ -104,9 +144,109 @@ function weekAgo() {
   const d = new Date(); d.setDate(d.getDate() - 7);
   return d.toISOString().split('T')[0];
 }
-function dayOfWeek() { return new Date().getDay(); }
 
-// ── Sales helpers ─────────────────────────────────────────────────
+// ── Build item selection keyboard ─────────────────────────────────
+function buildItemKeyboard() {
+  const rows = [];
+  for (let i = 0; i < PURCHASE_ITEMS.length; i += 2) {
+    const row = [];
+    const a = PURCHASE_ITEMS[i];
+    row.push({ text: `${a.emoji} ${a.name}`, callback_data: `item_${i}` });
+    if (PURCHASE_ITEMS[i + 1]) {
+      const b = PURCHASE_ITEMS[i + 1];
+      row.push({ text: `${b.emoji} ${b.name}`, callback_data: `item_${i+1}` });
+    }
+    rows.push(row);
+  }
+  rows.push([{ text: '❌ Cancel', callback_data: 'cancel' }]);
+  return { inline_keyboard: rows };
+}
+
+// ── Purchase flow ─────────────────────────────────────────────────
+async function startBuyFlow(chatId, fromName) {
+  sessions[chatId] = { step: 'select_item', buyer: fromName };
+  await send(chatId, `📦 <b>What did you buy?</b>\nSelect an item:`, buildItemKeyboard());
+}
+
+async function handleItemSelected(chatId, itemIndex, fromName) {
+  const item = PURCHASE_ITEMS[itemIndex];
+  if (!item) return;
+  sessions[chatId] = {
+    step: 'enter_qty',
+    item: item,
+    buyer: fromName
+  };
+  await send(chatId, `${item.emoji} <b>${item.name}</b> selected!\n\nHow many <b>${item.unit}</b> did you buy?\n(Type just the number)`);
+}
+
+async function handleQtyEntered(chatId, qty) {
+  const session = sessions[chatId];
+  if (!session || session.step !== 'enter_qty') return false;
+  const qtyNum = parseFloat(qty);
+  if (isNaN(qtyNum) || qtyNum <= 0) {
+    await send(chatId, '❌ Please enter a valid number (e.g. 10 or 5.5)');
+    return true;
+  }
+  session.qty = qtyNum;
+  session.step = 'enter_price';
+  await send(chatId, `📏 <b>${qtyNum} ${session.item.unit}</b> of ${session.item.emoji} ${session.item.name}\n\nWhat was the <b>unit price</b> per ${session.item.unit}? (in ETB)\n(Type just the number)`);
+  return true;
+}
+
+async function handlePriceEntered(chatId, price) {
+  const session = sessions[chatId];
+  if (!session || session.step !== 'enter_price') return false;
+  const priceNum = parseFloat(price);
+  if (isNaN(priceNum) || priceNum <= 0) {
+    await send(chatId, '❌ Please enter a valid price (e.g. 2200)');
+    return true;
+  }
+  session.unitPrice = priceNum;
+  session.totalPrice = session.qty * priceNum;
+
+  // Save to database
+  await dbPost('purchases', {
+    purchase_date: today(),
+    item_name: session.item.name,
+    qty: session.qty,
+    unit: session.item.unit,
+    unit_price: session.unitPrice,
+    total_price: session.totalPrice,
+    buyer_name: session.buyer
+  });
+
+  // Update stock if ingredient exists
+  let stockMsg = '';
+  const encoded = encodeURIComponent(session.item.name);
+  const ings = await dbGet(`ingredients?name=ilike.${encoded}`);
+  if (Array.isArray(ings) && ings.length > 0) {
+    const ing = ings[0];
+    const newQty = parseFloat(ing.qty) + session.qty;
+    await dbPatch(`ingredients?id=eq.${ing.id}`, { qty: newQty });
+    stockMsg = `\n✅ Stock updated: <b>${ing.name} → ${newQty.toFixed(2)} ${ing.unit}</b>`;
+  }
+
+  // Send confirmation to group
+  const msg = `🛒 <b>Purchase logged by ${session.buyer}</b>
+
+${session.item.emoji} <b>${session.item.name}</b>
+📏 Qty: <b>${session.qty} ${session.item.unit}</b>
+💵 Unit price: <b>${session.unitPrice.toLocaleString()} ETB/${session.item.unit}</b>
+💰 Total: <b>${session.totalPrice.toLocaleString()} ETB</b>
+📅 ${today()}${stockMsg}`;
+
+  await send(GROUP_CHAT_ID, msg);
+
+  // If in private chat, also confirm there
+  if (String(chatId) !== GROUP_CHAT_ID) {
+    await send(chatId, '✅ Purchase recorded successfully!');
+  }
+
+  delete sessions[chatId];
+  return true;
+}
+
+// ── Sales & stock helpers ─────────────────────────────────────────
 async function getSalesSummary(date) {
   const sales = await dbGet(`sales?sale_date=eq.${date}&select=qty,revenue,item_name`);
   if (!Array.isArray(sales) || sales.length === 0) return null;
@@ -115,7 +255,7 @@ async function getSalesSummary(date) {
   const itemMap = {};
   sales.forEach(s => { itemMap[s.item_name] = (itemMap[s.item_name] || 0) + parseInt(s.qty); });
   const top = Object.entries(itemMap).sort((a, b) => b[1] - a[1]).slice(0, 5);
-  return { totalRev, totalQty, top, date };
+  return { totalRev, totalQty, top };
 }
 
 async function getWeeklySummary() {
@@ -137,44 +277,11 @@ async function getStockAlerts() {
   return { low, out };
 }
 
-// ── Purchase logging ──────────────────────────────────────────────
-async function logPurchase(itemName, qty, unit, unitPrice, totalPrice, buyerName) {
-  // Save to purchases table
-  await dbPost('purchases', {
-    purchase_date: today(),
-    item_name: itemName,
-    qty: parseFloat(qty),
-    unit: unit,
-    unit_price: parseFloat(unitPrice),
-    total_price: parseFloat(totalPrice),
-    buyer_name: buyerName
-  });
-
-  // Update stock if ingredient exists
-  const ings = await dbGet(`ingredients?name=ilike.${encodeURIComponent(itemName)}`);
-  if (Array.isArray(ings) && ings.length > 0) {
-    const ing = ings[0];
-    const newQty = parseFloat(ing.qty) + parseFloat(qty);
-    await dbPatch(`ingredients?id=eq.${ing.id}`, { qty: newQty });
-    return { stockUpdated: true, ingredient: ing.name, newQty, unit: ing.unit };
-  }
-  return { stockUpdated: false };
-}
-
-async function getPurchaseHistory(days = 7) {
-  const since = new Date();
-  since.setDate(since.getDate() - days);
-  const sinceStr = since.toISOString().split('T')[0];
-  return dbGet(`purchases?purchase_date=gte.${sinceStr}&order=purchase_date.desc,created_at.desc&limit=50`);
-}
-
-// ── Message formatters ────────────────────────────────────────────
 function fmtSales(data, label) {
   if (!data) return `📊 No sales recorded for ${label}.`;
   const icons = ['🥇','🥈','🥉','4️⃣','5️⃣'];
   const topLines = data.top.map(([name, qty], i) => `  ${icons[i]} ${name} — ${qty} sold`).join('\n');
-  return `☕ <b>The Dessert Bar</b>
-📅 <b>${label}</b>
+  return `☕ <b>The Dessert Bar — ${label}</b>
 
 💰 Revenue: <b>${Math.round(data.totalRev).toLocaleString()} ETB</b>
 🛒 Items sold: <b>${data.totalQty}</b>
@@ -198,172 +305,67 @@ function fmtStock({ low, out }) {
   return msg;
 }
 
-function fmtFullStock(ings) {
-  if (!ings.length) return '📦 No ingredients in stock yet.';
-  let msg = '📦 <b>Full Stock List</b>\n\n';
-  ings.forEach(i => {
-    const qty = parseFloat(i.qty);
-    const min = parseFloat(i.min_qty);
-    const icon = qty <= 0 ? '🔴' : (qty <= min && min > 0) ? '🟡' : '🟢';
-    msg += `${icon} ${i.name}: <b>${qty.toFixed(2)} ${i.unit}</b>\n`;
-  });
-  return msg;
-}
-
 function fmtDailySchedule() {
-  const dow = dayOfWeek();
+  const dow = new Date().getDay();
   const schedule = WEEKLY_SCHEDULE[dow];
   const itemLines = schedule.items.map(i => `  • ${i}`).join('\n');
   return `🛒 <b>Today's Purchasing List — ${schedule.day}</b>
 
 ${itemLines}
 
-To log a purchase, type:
-<code>/bought [item] [qty] [unit] [unit price]</code>
-
-Example:
-<code>/bought Coffee 10 kg 2200</code>`;
+Tap /buy to log what you purchased.`;
 }
 
 // ── Command handler ───────────────────────────────────────────────
-async function handleCommand(chatId, text, fromName, isGroup) {
-  const parts = text.trim().split(/\s+/);
-  const cmd = parts[0].toLowerCase();
+async function handleCommand(chatId, text, fromName) {
+  const cmd = text.trim().toLowerCase().split(' ')[0];
 
-  // ── /help or /start ──
-  if (cmd === '/start' || cmd === '/help') {
-    if (isGroup) {
-      await send(chatId, `☕ <b>Dessert Bar Stock Bot</b>
+  if (cmd === '/buy') {
+    await startBuyFlow(chatId, fromName);
 
-<b>Purchaser commands:</b>
-/bought [item] [qty] [unit] [price] — Log a purchase
-Example: <code>/bought Coffee 10 kg 2200</code>
-
-/schedule — Today's purchasing list
-/purchases — This week's purchases
-
-<b>Management commands:</b>
-/stock — Stock alerts
-/sales — Yesterday's sales summary`);
-    } else {
-      await send(chatId, `☕ <b>Welcome to The Dessert Bar Bot!</b>
-
-📊 <b>Sales:</b>
-/today — Today's sales
-/yesterday — Yesterday's summary
-/weekly — This week's summary
-
-📦 <b>Stock:</b>
-/stock — Stock alerts
-/fullstock — Complete stock list
-
-🛒 <b>Purchases:</b>
-/purchases — This week's purchase log
-/schedule — Today's purchase list`);
-    }
-
-  // ── /schedule ──
   } else if (cmd === '/schedule') {
     await send(chatId, fmtDailySchedule());
 
-  // ── /bought ──
-  } else if (cmd === '/bought') {
-    // Format: /bought Coffee 10 kg 2200
-    // Or:     /bought Coffee 10kg 2200  (unit attached to qty)
-    if (parts.length < 4) {
-      await send(chatId, `❌ Wrong format. Use:
-<code>/bought [item] [qty] [unit] [unit price]</code>
-Example: <code>/bought Coffee 10 kg 2200</code>
-Example: <code>/bought Milk 20 L 45</code>`);
-      return;
-    }
-
-    // Parse flexibly
-    let itemName, qty, unit, unitPrice;
-
-    // Check if unit is attached to qty (e.g. "10kg")
-    const qtyUnitMatch = parts[2].match(/^([\d.]+)([a-zA-Z]+)$/);
-    if (qtyUnitMatch) {
-      itemName = parts[1];
-      qty = parseFloat(qtyUnitMatch[1]);
-      unit = qtyUnitMatch[2];
-      unitPrice = parseFloat(parts[3]);
-    } else if (parts.length >= 5) {
-      itemName = parts[1];
-      qty = parseFloat(parts[2]);
-      unit = parts[3];
-      unitPrice = parseFloat(parts[4]);
-    } else {
-      itemName = parts[1];
-      qty = parseFloat(parts[2]);
-      unit = 'pcs';
-      unitPrice = parseFloat(parts[3]);
-    }
-
-    const totalPrice = qty * unitPrice;
-
-    if (isNaN(qty) || isNaN(unitPrice)) {
-      await send(chatId, `❌ Could not parse numbers. Use:
-<code>/bought Coffee 10 kg 2200</code>`);
-      return;
-    }
-
-    const result = await logPurchase(itemName, qty, unit, unitPrice, totalPrice, fromName);
-
-    let msg = `✅ <b>Purchase recorded by ${fromName}</b>
-
-📦 Item: <b>${itemName}</b>
-📏 Quantity: <b>${qty} ${unit}</b>
-💵 Unit price: <b>${unitPrice.toLocaleString()} ETB/${unit}</b>
-💰 Total paid: <b>${totalPrice.toLocaleString()} ETB</b>
-📅 Date: ${today()}`;
-
-    if (result.stockUpdated) {
-      msg += `\n\n✅ Stock updated: ${result.ingredient} → <b>${result.newQty.toFixed(2)} ${result.unit}</b>`;
-    } else {
-      msg += `\n\n⚠️ Note: "${itemName}" not found in ingredients list — stock not updated automatically.`;
-    }
-
-    await send(chatId, msg);
-
-  // ── /purchases ──
   } else if (cmd === '/purchases') {
-    const purchases = await getPurchaseHistory(7);
+    const since = new Date(); since.setDate(since.getDate() - 7);
+    const sinceStr = since.toISOString().split('T')[0];
+    const purchases = await dbGet(`purchases?purchase_date=gte.${sinceStr}&order=purchase_date.desc&limit=30`);
     if (!Array.isArray(purchases) || purchases.length === 0) {
-      await send(chatId, '🛒 No purchases recorded this week yet.');
-      return;
+      await send(chatId, '🛒 No purchases recorded this week yet.'); return;
     }
     let total = 0;
     let msg = '🛒 <b>Purchase Log — Last 7 Days</b>\n\n';
     purchases.forEach(p => {
       total += parseFloat(p.total_price || 0);
-      msg += `• <b>${p.item_name}</b> — ${p.qty} ${p.unit} @ ${parseFloat(p.unit_price).toLocaleString()} ETB\n`;
-      msg += `  Total: ${parseFloat(p.total_price).toLocaleString()} ETB | ${p.purchase_date} | ${p.buyer_name}\n\n`;
+      msg += `${p.purchase_date} — <b>${p.item_name}</b>\n`;
+      msg += `  ${p.qty} ${p.unit} @ ${parseFloat(p.unit_price).toLocaleString()} ETB = <b>${parseFloat(p.total_price).toLocaleString()} ETB</b> (${p.buyer_name})\n\n`;
     });
-    msg += `💰 <b>Total spent: ${total.toLocaleString()} ETB</b>`;
+    msg += `💰 <b>Total: ${total.toLocaleString()} ETB</b>`;
     await send(chatId, msg);
 
-  // ── /stock ──
-  } else if (cmd === '/stock' || cmd === '/low') {
+  } else if (cmd === '/stock') {
     const alerts = await getStockAlerts();
     await send(chatId, fmtStock(alerts));
 
-  // ── /fullstock (personal only) ──
   } else if (cmd === '/fullstock') {
     const ings = await dbGet('ingredients?order=name');
-    await send(chatId, fmtFullStock(Array.isArray(ings) ? ings : []));
+    if (!Array.isArray(ings) || !ings.length) { await send(chatId, '📦 No ingredients yet.'); return; }
+    let msg = '📦 <b>Full Stock List</b>\n\n';
+    ings.forEach(i => {
+      const qty = parseFloat(i.qty), min = parseFloat(i.min_qty);
+      const icon = qty <= 0 ? '🔴' : (qty <= min && min > 0) ? '🟡' : '🟢';
+      msg += `${icon} ${i.name}: <b>${qty.toFixed(2)} ${i.unit}</b>\n`;
+    });
+    await send(chatId, msg);
 
-  // ── /today ──
   } else if (cmd === '/today') {
     const data = await getSalesSummary(today());
     await send(chatId, fmtSales(data, `Today (${today()})`));
 
-  // ── /yesterday or /sales ──
   } else if (cmd === '/yesterday' || cmd === '/sales') {
     const data = await getSalesSummary(yesterday());
     await send(chatId, fmtSales(data, `Yesterday (${yesterday()})`));
 
-  // ── /weekly ──
   } else if (cmd === '/weekly') {
     const data = await getWeeklySummary();
     if (!data) { await send(chatId, '📊 No sales data this week yet.'); return; }
@@ -377,27 +379,54 @@ Example: <code>/bought Milk 20 L 45</code>`);
 🏆 <b>Top sellers:</b>
 ${topLines}`);
 
-  } else if (isGroup) {
-    // In group, only respond to commands — ignore normal chat
+  } else if (cmd === '/help' || cmd === '/start') {
+    await send(chatId, `☕ <b>Dessert Bar Bot Commands</b>
+
+🛒 <b>Purchasing:</b>
+/buy — Log a purchase (interactive)
+/schedule — Today's purchase list
+/purchases — This week's purchase log
+
+📦 <b>Stock:</b>
+/stock — Stock alerts
+/fullstock — Full stock list
+
+📊 <b>Sales:</b>
+/today — Today's sales
+/yesterday — Yesterday's summary
+/weekly — This week's summary`);
+  }
+}
+
+// ── Callback query handler (button taps) ─────────────────────────
+async function handleCallback(callbackQuery) {
+  const chatId = String(callbackQuery.message.chat.id);
+  const data = callbackQuery.data;
+  const fromName = callbackQuery.from ? callbackQuery.from.first_name : 'Unknown';
+
+  await answerCallback(callbackQuery.id);
+
+  if (data === 'cancel') {
+    delete sessions[chatId];
+    await send(chatId, '❌ Purchase cancelled.');
     return;
-  } else {
-    await send(chatId, '❓ Unknown command. Type /help to see all commands.');
+  }
+
+  if (data.startsWith('item_')) {
+    const idx = parseInt(data.replace('item_', ''));
+    await handleItemSelected(chatId, idx, fromName);
+    return;
   }
 }
 
 // ── Scheduled reports ─────────────────────────────────────────────
 async function sendMorningReport() {
-  // 1. Send sales summary to owner
   const data = await getSalesSummary(yesterday());
   const alerts = await getStockAlerts();
   let msg = fmtSales(data, `Yesterday (${yesterday()})`);
   if (alerts.out.length || alerts.low.length) msg += '\n\n' + fmtStock(alerts);
   await send(OWNER_CHAT_ID, msg);
-
-  // 2. Send daily purchase schedule to group
   await send(GROUP_CHAT_ID, fmtDailySchedule());
-
-  // 3. Send stock alerts to group if any
   if (alerts.out.length || alerts.low.length) {
     await send(GROUP_CHAT_ID, fmtStock(alerts));
   }
@@ -416,20 +445,46 @@ async function poll() {
     if (data.ok && data.result && data.result.length) {
       for (const update of data.result) {
         offset = update.update_id + 1;
+
+        // Handle button taps
+        if (update.callback_query) {
+          await handleCallback(update.callback_query);
+          continue;
+        }
+
+        // Handle messages
         const msg = update.message;
-        if (msg && msg.text && msg.text.startsWith('/')) {
-          const chatId = String(msg.chat.id);
-          const isGroup = msg.chat.type === 'group' || msg.chat.type === 'supergroup';
-          const fromName = msg.from ? (msg.from.first_name || 'Unknown') : 'Unknown';
-          console.log(`[${new Date().toISOString()}] ${isGroup ? 'GROUP' : 'PRIVATE'} from ${fromName}: ${msg.text}`);
-          await handleCommand(chatId, msg.text, fromName, isGroup);
+        if (!msg || !msg.text) continue;
+
+        const chatId = String(msg.chat.id);
+        const fromName = msg.from ? msg.from.first_name : 'Unknown';
+        const text = msg.text;
+
+        console.log(`[${new Date().toISOString()}] ${fromName} (${chatId}): ${text}`);
+
+        // Check if user is in a buy session and entering qty or price
+        if (sessions[chatId] && !text.startsWith('/')) {
+          const step = sessions[chatId].step;
+          if (step === 'enter_qty') {
+            await handleQtyEntered(chatId, text);
+            continue;
+          }
+          if (step === 'enter_price') {
+            await handlePriceEntered(chatId, text);
+            continue;
+          }
+        }
+
+        // Handle commands
+        if (text.startsWith('/')) {
+          await handleCommand(chatId, text, fromName);
         }
       }
     }
   } catch(e) {
     console.error('Poll error:', e.message);
   }
-  setTimeout(poll, 2000);
+  setTimeout(poll, 1500);
 }
 
 // ── Scheduler ─────────────────────────────────────────────────────
@@ -442,27 +497,14 @@ function startScheduler() {
   }, 60000);
 }
 
-// ── Create purchases table if needed ─────────────────────────────
-async function ensurePurchasesTable() {
-  // We can't create tables via REST API — user needs to run SQL
-  // Just log a reminder
-  console.log('Note: Make sure the purchases table exists in Supabase');
-}
-
 // ── Start ─────────────────────────────────────────────────────────
 async function main() {
   console.log('🚀 The Dessert Bar Bot starting...');
+  await send(OWNER_CHAT_ID, '🚀 <b>Dessert Bar Bot is online!</b>\nType /help for commands.');
+  await send(GROUP_CHAT_ID, `🚀 <b>Dessert Bar Stock Bot updated!</b>
 
-  await send(OWNER_CHAT_ID, `🚀 <b>Dessert Bar Bot is online!</b>
-Type /help for commands.`);
-
-  await send(GROUP_CHAT_ID, `🚀 <b>Dessert Bar Stock Bot is now active in this group!</b>
-
-Purchaser — to log a purchase type:
-<code>/bought Coffee 10 kg 2200</code>
-
-Type /help for all commands.`);
-
+Purchaser — tap /buy to log a purchase.
+No typing needed — just tap the buttons!`);
   startScheduler();
   poll();
   console.log('✅ Bot running!');
