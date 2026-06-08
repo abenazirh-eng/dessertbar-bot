@@ -163,18 +163,19 @@ function buildItemKeyboard() {
 }
 
 // ── Purchase flow ─────────────────────────────────────────────────
-async function startBuyFlow(chatId, fromName) {
-  sessions[chatId] = { step: 'select_item', buyer: fromName };
+async function startBuyFlow(chatId, fromName, sessionKey) {
+  sessions[sessionKey] = { step: 'select_item', buyer: fromName, chatId: chatId };
   await send(chatId, `📦 <b>What did you buy?</b>\nSelect an item:`, buildItemKeyboard());
 }
 
-async function handleItemSelected(chatId, itemIndex, fromName) {
+async function handleItemSelected(sessionKey, chatId, itemIndex, fromName) {
   const item = PURCHASE_ITEMS[itemIndex];
   if (!item) return;
-  sessions[chatId] = {
+  sessions[sessionKey] = {
     step: 'enter_qty',
     item: item,
-    buyer: fromName
+    buyer: fromName,
+    chatId: chatId
   };
   await send(chatId, `${item.emoji} <b>${item.name}</b> selected!\n\nHow many <b>${item.unit}</b> did you buy?\n(Type just the number)`);
 }
@@ -317,11 +318,11 @@ Tap /buy to log what you purchased.`;
 }
 
 // ── Command handler ───────────────────────────────────────────────
-async function handleCommand(chatId, text, fromName) {
+async function handleCommand(chatId, text, fromName, sessionKey) {
   const cmd = text.trim().toLowerCase().split(' ')[0].split('@')[0];
 
   if (cmd === '/buy') {
-    await startBuyFlow(chatId, fromName);
+    await startBuyFlow(chatId, fromName, sessionKey);
 
   } else if (cmd === '/schedule') {
     await send(chatId, fmtDailySchedule());
@@ -407,14 +408,18 @@ async function handleCallback(callbackQuery) {
   await answerCallback(callbackQuery.id);
 
   if (data === 'cancel') {
-    delete sessions[chatId];
+    const userId3 = String(callbackQuery.from ? callbackQuery.from.id : chatId);
+    const sessionKey3 = userId3 + '_' + chatId;
+    delete sessions[sessionKey3];
     await send(chatId, '❌ Purchase cancelled.');
     return;
   }
 
   if (data.startsWith('item_')) {
     const idx = parseInt(data.replace('item_', ''));
-    await handleItemSelected(chatId, idx, fromName);
+    const userId2 = String(callbackQuery.from ? callbackQuery.from.id : chatId);
+    const sessionKey2 = userId2 + '_' + chatId;
+    await handleItemSelected(sessionKey2, chatId, idx, fromName);
     return;
   }
 }
@@ -439,12 +444,19 @@ async function sendEveningReport() {
 
 // ── Polling ───────────────────────────────────────────────────────
 let offset = 0;
+const processedUpdates = new Set();
 async function poll() {
   try {
     const data = await getUpdates(offset);
     if (data.ok && data.result && data.result.length) {
       for (const update of data.result) {
         offset = update.update_id + 1;
+        if (processedUpdates.has(update.update_id)) continue;
+        processedUpdates.add(update.update_id);
+        if (processedUpdates.size > 1000) {
+          const first = [...processedUpdates][0];
+          processedUpdates.delete(first);
+        }
 
         // Handle button taps
         if (update.callback_query) {
@@ -457,27 +469,29 @@ async function poll() {
         if (!msg || !msg.text) continue;
 
         const chatId = String(msg.chat.id);
+        const userId = String(msg.from ? msg.from.id : chatId);
+        const sessionKey = userId + '_' + chatId;
         const fromName = msg.from ? msg.from.first_name : 'Unknown';
         const text = msg.text;
 
         console.log(`[${new Date().toISOString()}] ${fromName} (${chatId}): ${text}`);
 
         // Check if user is in a buy session and entering qty or price
-        if (sessions[chatId] && !text.startsWith('/')) {
-          const step = sessions[chatId].step;
+        if (sessions[sessionKey] && !text.startsWith('/')) {
+          const step = sessions[sessionKey].step;
           if (step === 'enter_qty') {
-            await handleQtyEntered(chatId, text);
+            await handleQtyEntered(sessionKey, text);
             continue;
           }
           if (step === 'enter_price') {
-            await handlePriceEntered(chatId, text);
+            await handlePriceEntered(sessionKey, text);
             continue;
           }
         }
 
         // Handle commands
         if (text.startsWith('/')) {
-          await handleCommand(chatId, text, fromName);
+          await handleCommand(chatId, text, fromName, sessionKey);
         }
       }
     }
