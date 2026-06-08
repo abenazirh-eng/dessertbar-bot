@@ -205,30 +205,36 @@ async function handlePriceEntered(chatId, price) {
   session.unitPrice = priceNum;
   session.totalPrice = session.qty * priceNum;
 
-  // Save to database
-  await dbPost('purchases', {
-    purchase_date: today(),
-    item_name: session.item.name,
-    qty: session.qty,
-    unit: session.item.unit,
-    unit_price: session.unitPrice,
-    total_price: session.totalPrice,
-    buyer_name: session.buyer
-  });
+  try {
+    // Save to database
+    await dbPost('purchases', {
+      purchase_date: today(),
+      item_name: session.item.name,
+      qty: session.qty,
+      unit: session.item.unit,
+      unit_price: session.unitPrice,
+      total_price: session.totalPrice,
+      buyer_name: session.buyer
+    });
 
-  // Update stock if ingredient exists
-  let stockMsg = '';
-  const encoded = encodeURIComponent(session.item.name);
-  const ings = await dbGet(`ingredients?name=ilike.${encoded}`);
-  if (Array.isArray(ings) && ings.length > 0) {
-    const ing = ings[0];
-    const newQty = parseFloat(ing.qty) + session.qty;
-    await dbPatch(`ingredients?id=eq.${ing.id}`, { qty: newQty });
-    stockMsg = `\n✅ Stock updated: <b>${ing.name} → ${newQty.toFixed(2)} ${ing.unit}</b>`;
-  }
+    // Update stock if ingredient exists
+    let stockMsg = '';
+    try {
+      const allIngs = await dbGet('ingredients?order=name');
+      if (Array.isArray(allIngs)) {
+        const ing = allIngs.find(i => i.name.toLowerCase() === session.item.name.toLowerCase());
+        if (ing) {
+          const newQty = parseFloat(ing.qty) + session.qty;
+          await dbPatch(`ingredients?id=eq.${ing.id}`, { qty: newQty });
+          stockMsg = `\n✅ Stock updated: <b>${ing.name} → ${newQty.toFixed(2)} ${ing.unit}</b>`;
+        }
+      }
+    } catch(stockErr) {
+      console.error('Stock update error:', stockErr.message);
+    }
 
-  // Send confirmation to group
-  const msg = `🛒 <b>Purchase logged by ${session.buyer}</b>
+    // Send confirmation to group
+    const confirmMsg = `🛒 <b>Purchase logged by ${session.buyer}</b>
 
 ${session.item.emoji} <b>${session.item.name}</b>
 📏 Qty: <b>${session.qty} ${session.item.unit}</b>
@@ -236,11 +242,17 @@ ${session.item.emoji} <b>${session.item.name}</b>
 💰 Total: <b>${session.totalPrice.toLocaleString()} ETB</b>
 📅 ${today()}${stockMsg}`;
 
-  await send(GROUP_CHAT_ID, msg);
+    await send(GROUP_CHAT_ID, confirmMsg);
 
-  // If in private chat, also confirm there
-  if (String(chatId) !== GROUP_CHAT_ID) {
-    await send(chatId, '✅ Purchase recorded successfully!');
+    // Get the chat where the session started
+    const sessionChatId = session.chatId || chatId;
+    if (String(sessionChatId) !== GROUP_CHAT_ID) {
+      await send(sessionChatId, '✅ Purchase recorded successfully!');
+    }
+
+  } catch(e) {
+    console.error('Purchase save error:', e.message);
+    await send(GROUP_CHAT_ID, `❌ Error saving purchase: ${e.message}`);
   }
 
   delete sessions[chatId];
@@ -445,6 +457,7 @@ async function sendEveningReport() {
 // ── Polling ───────────────────────────────────────────────────────
 let offset = 0;
 const processedUpdates = new Set();
+const processedMessages = new Set();
 async function poll() {
   try {
     const data = await getUpdates(offset);
@@ -453,6 +466,15 @@ async function poll() {
         offset = update.update_id + 1;
         if (processedUpdates.has(update.update_id)) continue;
         processedUpdates.add(update.update_id);
+        // Also deduplicate by message_id + chat_id
+        if (update.message) {
+          const msgKey = `${update.message.chat.id}_${update.message.message_id}`;
+          if (processedMessages.has(msgKey)) continue;
+          processedMessages.add(msgKey);
+          if (processedMessages.size > 500) {
+            processedMessages.delete([...processedMessages][0]);
+          }
+        }
         if (processedUpdates.size > 1000) {
           const first = [...processedUpdates][0];
           processedUpdates.delete(first);
