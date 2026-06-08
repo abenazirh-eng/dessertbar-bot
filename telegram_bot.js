@@ -180,9 +180,10 @@ async function handleItemSelected(sessionKey, chatId, itemIndex, fromName) {
   await send(chatId, `${item.emoji} <b>${item.name}</b> selected!\n\nHow many <b>${item.unit}</b> did you buy?\n(Type just the number)`);
 }
 
-async function handleQtyEntered(chatId, qty) {
-  const session = sessions[chatId];
+async function handleQtyEntered(sessionKey, qty) {
+  const session = sessions[sessionKey];
   if (!session || session.step !== 'enter_qty') return false;
+  const chatId = session.chatId;
   const qtyNum = parseFloat(qty);
   if (isNaN(qtyNum) || qtyNum <= 0) {
     await send(chatId, '❌ Please enter a valid number (e.g. 10 or 5.5)');
@@ -194,9 +195,10 @@ async function handleQtyEntered(chatId, qty) {
   return true;
 }
 
-async function handlePriceEntered(chatId, price) {
-  const session = sessions[chatId];
+async function handlePriceEntered(sessionKey, price) {
+  const session = sessions[sessionKey];
   if (!session || session.step !== 'enter_price') return false;
+  const chatId = session.chatId;
   const priceNum = parseFloat(price);
   if (isNaN(priceNum) || priceNum <= 0) {
     await send(chatId, '❌ Please enter a valid price (e.g. 2200)');
@@ -255,7 +257,7 @@ ${session.item.emoji} <b>${session.item.name}</b>
     await send(GROUP_CHAT_ID, `❌ Error saving purchase: ${e.message}`);
   }
 
-  delete sessions[chatId];
+  delete sessions[sessionKey];
   return true;
 }
 
