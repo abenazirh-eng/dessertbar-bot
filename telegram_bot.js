@@ -318,7 +318,7 @@ Tap /buy to log what you purchased.`;
 
 // ── Command handler ───────────────────────────────────────────────
 async function handleCommand(chatId, text, fromName) {
-  const cmd = text.trim().toLowerCase().split(' ')[0];
+  const cmd = text.trim().toLowerCase().split(' ')[0].split('@')[0];
 
   if (cmd === '/buy') {
     await startBuyFlow(chatId, fromName);
