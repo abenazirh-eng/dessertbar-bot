@@ -394,8 +394,22 @@ async function handleCommand(chatId, text, fromName, sessionKey) {
 🏆 <b>Top sellers:</b>
 ${topLines}`);
 
+  } else if (cmd === '/send') {
+    await startSendFlow(chatId, fromName, 'main');
+
+  } else if (cmd === '/made') {
+    await startSendFlow(chatId, fromName, 'cafe');
+
+  } else if (cmd === '/cakestock') {
+    await sendCakeStockReport();
+
   } else if (cmd === '/help' || cmd === '/start') {
     await send(chatId, `☕ <b>Dessert Bar Bot Commands</b>
+
+🏭 <b>Production:</b>
+/send — Main kitchen logs a delivery
+/made — Cafe kitchen logs production
+/cakestock — Current cake stock report
 
 🛒 <b>Purchasing:</b>
 /buy — Log a purchase (interactive)
@@ -428,6 +442,10 @@ async function handleCallback(callbackQuery) {
     await send(chatId, '❌ Purchase cancelled.');
     return;
   }
+
+  // Production callbacks
+  const handled = await handleProductionCallback(callbackQuery);
+  if (handled) return;
 
   if (data.startsWith('item_')) {
     const idx = parseInt(data.replace('item_', ''));
@@ -500,6 +518,14 @@ async function poll() {
 
         console.log(`[${new Date().toISOString()}] ${fromName} (${chatId}): ${text}`);
 
+        // Check if user is in a production send session
+        if (sendSessions[chatId] && !text.startsWith('/')) {
+          if (sendSessions[chatId].step === 'enter_qty') {
+            await handleSendQty(chatId, text);
+            continue;
+          }
+        }
+
         // Check if user is in a buy session and entering qty or price
         if (sessions[sessionKey] && !text.startsWith('/')) {
           const step = sessions[sessionKey].step;
@@ -530,6 +556,7 @@ function startScheduler() {
   setInterval(async () => {
     const now = new Date();
     const hhmm = `${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`;
+    if (hhmm === '07:00') await sendCakeStockReport();
     if (hhmm === '08:00') await sendMorningReport();
     if (hhmm === '22:00') await sendEveningReport();
   }, 60000);
@@ -549,3 +576,338 @@ No typing needed — just tap the buttons!`);
 }
 
 main().catch(console.error);
+
+// ================================================================
+// PRODUCTION TRACKING MODULE
+// ================================================================
+
+// All cake/production items with units
+const PRODUCTION_ITEMS = [
+  // Cakes - pcs
+  { name: 'Chocolate Cake',           emoji: '🍫', unit: 'pcs', source: 'main' },
+  { name: 'Oreo Cheesecake',          emoji: '🍰', unit: 'pcs', source: 'main' },
+  { name: 'Blueberry Cheesecake',     emoji: '🫐', unit: 'pcs', source: 'main' },
+  { name: 'Raspberry Cheesecake',     emoji: '🍰', unit: 'pcs', source: 'main' },
+  { name: 'Strawberry Cheesecake',    emoji: '🍓', unit: 'pcs', source: 'main' },
+  { name: 'Oreo Mousse Cake',         emoji: '🍰', unit: 'pcs', source: 'main' },
+  { name: 'Pistachio Mousse Cake',    emoji: '🟢', unit: 'pcs', source: 'main' },
+  { name: 'Hazelnut Mousse Cake',     emoji: '🍰', unit: 'pcs', source: 'main' },
+  { name: 'Red Velvet Cake',          emoji: '❤️',  unit: 'pcs', source: 'main' },
+  { name: 'Brownie',                  emoji: '🟫', unit: 'pcs', source: 'main' },
+  { name: 'Vegan Chocolate Cake',     emoji: '🌱', unit: 'pcs', source: 'main' },
+  { name: 'Vegan Chocolate Brownie',  emoji: '🌱', unit: 'pcs', source: 'main' },
+  { name: 'Chocolate Stuffed Donut',  emoji: '🍩', unit: 'pcs', source: 'main' },
+  { name: 'Cream Cheese Donut',       emoji: '🍩', unit: 'pcs', source: 'main' },
+  { name: 'English Cake',             emoji: '🎂', unit: 'pcs', source: 'main' },
+  { name: 'Banana Bread',             emoji: '🍌', unit: 'pcs', source: 'main' },
+  { name: 'Chocolate Ball',           emoji: '⚫', unit: 'pcs', source: 'main' },
+  // Tortas - kg
+  { name: 'Chocolate Cake Torta',     emoji: '🎂', unit: 'kg',  source: 'main' },
+  { name: 'Blueberry Cheesecake Torta', emoji: '🫐', unit: 'kg', source: 'main' },
+  { name: 'Oreo Cheesecake Torta',    emoji: '🍰', unit: 'kg',  source: 'main' },
+  { name: 'Oreo Mousse Torta',        emoji: '🍰', unit: 'kg',  source: 'main' },
+  { name: 'Chocolate Mousse Torta',   emoji: '🍫', unit: 'kg',  source: 'main' },
+  // Cafe kitchen items
+  { name: 'Tiramisu in a Cup',        emoji: '☕', unit: 'pcs', source: 'cafe' },
+  { name: 'Lemon Cake in a Cup',      emoji: '🍋', unit: 'pcs', source: 'cafe' },
+  { name: 'Strawberry Tiramisu',      emoji: '🍓', unit: 'pcs', source: 'cafe' },
+];
+
+// Pending deliveries waiting for confirmation: { deliveryId, items, from }
+const pendingDeliveries = {};
+// Send sessions for building delivery item by item
+const sendSessions = {};
+
+// ── Build production item keyboard ────────────────────────────────
+function buildProductionKeyboard(source, selectedItems = []) {
+  const items = PRODUCTION_ITEMS.filter(i => i.source === source);
+  const rows = [];
+  for (let i = 0; i < items.length; i += 2) {
+    const row = [];
+    const a = items[i];
+    const aSelected = selectedItems.includes(i);
+    row.push({ text: `${aSelected ? '✅' : a.emoji} ${a.name}`, callback_data: `prod_${source}_${i}` });
+    if (items[i+1]) {
+      const b = items[i+1];
+      const bSelected = selectedItems.includes(i+1);
+      row.push({ text: `${bSelected ? '✅' : b.emoji} ${b.name}`, callback_data: `prod_${source}_${i+1}` });
+    }
+    rows.push(row);
+  }
+  rows.push([
+    { text: '✅ Done — Submit delivery', callback_data: `prod_submit_${source}` },
+    { text: '❌ Cancel', callback_data: 'prod_cancel' }
+  ]);
+  return { inline_keyboard: rows };
+}
+
+// ── Start send flow ───────────────────────────────────────────────
+async function startSendFlow(chatId, fromName, source) {
+  const label = source === 'main' ? '🏭 Main Kitchen' : '☕ Cafe Kitchen';
+  sendSessions[chatId] = {
+    source, fromName, items: [], step: 'selecting',
+    currentItemIdx: null
+  };
+  await send(chatId,
+    `${label} — <b>What are you sending?</b>\n\nTap each item you are sending:`,
+    buildProductionKeyboard(source)
+  );
+}
+
+// ── Handle production item tap ────────────────────────────────────
+async function handleProductionItemTap(chatId, source, itemIdx, fromName) {
+  const session = sendSessions[chatId];
+  if (!session) return;
+
+  const items = PRODUCTION_ITEMS.filter(i => i.source === source);
+  const item = items[itemIdx];
+  if (!item) return;
+
+  // Check if already added
+  const existing = session.items.find(i => i.name === item.name);
+  if (existing) {
+    // Ask to update qty
+    session.editingItem = item.name;
+    session.step = 'enter_qty';
+    await send(chatId, `How many <b>${item.unit}</b> of ${item.emoji} <b>${item.name}</b>?\n(Type the number)`);
+  } else {
+    session.editingItem = item.name;
+    session.editingUnit = item.unit;
+    session.editingEmoji = item.emoji;
+    session.step = 'enter_qty';
+    await send(chatId, `How many <b>${item.unit}</b> of ${item.emoji} <b>${item.name}</b>?\n(Type the number)`);
+  }
+}
+
+// ── Handle qty input for send session ────────────────────────────
+async function handleSendQty(chatId, text) {
+  const session = sendSessions[chatId];
+  if (!session || session.step !== 'enter_qty') return false;
+
+  const qty = parseFloat(text);
+  if (isNaN(qty) || qty <= 0) {
+    await send(chatId, '❌ Please enter a valid number');
+    return true;
+  }
+
+  // Add or update item
+  const existing = session.items.find(i => i.name === session.editingItem);
+  if (existing) {
+    existing.qty = qty;
+  } else {
+    session.items.push({
+      name: session.editingItem,
+      unit: session.editingUnit,
+      emoji: session.editingEmoji,
+      qty
+    });
+  }
+
+  session.step = 'selecting';
+  session.editingItem = null;
+
+  // Show updated list and keyboard
+  const itemList = session.items.map(i => `  ${i.emoji} ${i.name}: <b>${i.qty} ${i.unit}</b>`).join('\n');
+  const source = session.source;
+  await send(chatId,
+    `✅ Added! Current list:\n${itemList}\n\nTap more items or press <b>Done</b>:`,
+    buildProductionKeyboard(source)
+  );
+  return true;
+}
+
+// ── Submit delivery ───────────────────────────────────────────────
+async function submitDelivery(chatId, source, fromName) {
+  const session = sendSessions[chatId];
+  if (!session || !session.items.length) {
+    await send(chatId, '❌ No items added yet. Tap items first.');
+    return;
+  }
+
+  // Save to DB
+  const delivery = await dbPost('production_deliveries', {
+    delivery_date: today(),
+    source: source === 'main' ? 'main_kitchen' : 'cafe_kitchen',
+    status: source === 'cafe' ? 'confirmed' : 'pending',
+    delivered_by: fromName
+  });
+
+  const deliveryId = delivery[0]?.id;
+  if (!deliveryId) {
+    await send(chatId, '❌ Error saving delivery. Try again.');
+    return;
+  }
+
+  // Save items
+  for (const item of session.items) {
+    await dbPost('production_delivery_items', {
+      delivery_id: deliveryId,
+      item_name: item.name,
+      qty_sent: item.qty,
+      qty_received: item.qty,
+      unit: item.unit
+    });
+  }
+
+  // If cafe kitchen — auto confirm and update stock
+  if (source === 'cafe') {
+    for (const item of session.items) {
+      await updateCakeStock(item.name, item.qty);
+    }
+    const itemList = session.items.map(i => `  ${i.emoji} ${i.name}: <b>${i.qty} ${i.unit}</b>`).join('\n');
+    await send(GROUP_CHAT_ID,
+      `☕ <b>Cafe Kitchen Production</b> — logged by ${fromName}\n\n${itemList}\n\n✅ Stock updated automatically`
+    );
+    delete sendSessions[chatId];
+    return;
+  }
+
+  // If main kitchen — post to group for cafe manager to confirm
+  const itemList = session.items.map(i => `  ${i.emoji} ${i.name}: <b>${i.qty} ${i.unit}</b>`).join('\n');
+  pendingDeliveries[deliveryId] = { items: session.items, from: fromName, deliveryId };
+
+  await send(GROUP_CHAT_ID,
+    `🏭 <b>Main Kitchen Delivery</b> — sent by ${fromName}\n📅 ${today()}\n\n${itemList}\n\n<i>Cafe manager — please confirm receipt:</i>`,
+    {
+      inline_keyboard: [[
+        { text: '✅ Confirm receipt', callback_data: `confirm_delivery_${deliveryId}` },
+        { text: '✏️ Edit quantities', callback_data: `edit_delivery_${deliveryId}` }
+      ]]
+    }
+  );
+
+  delete sendSessions[chatId];
+}
+
+// ── Confirm delivery ──────────────────────────────────────────────
+async function confirmDelivery(deliveryId, confirmedBy) {
+  const pending = pendingDeliveries[deliveryId];
+  if (!pending) {
+    // Load from DB
+    const items = await dbGet(`production_delivery_items?delivery_id=eq.${deliveryId}`);
+    if (!Array.isArray(items)) return;
+    for (const item of items) {
+      await updateCakeStock(item.item_name, item.qty_received || item.qty_sent);
+    }
+  } else {
+    for (const item of pending.items) {
+      await updateCakeStock(item.name, item.qty);
+    }
+    delete pendingDeliveries[deliveryId];
+  }
+
+  await dbPatch(`production_deliveries?id=eq.${deliveryId}`, {
+    status: 'confirmed',
+    confirmed_by: confirmedBy
+  });
+
+  await send(GROUP_CHAT_ID,
+    `✅ <b>Delivery confirmed by ${confirmedBy}</b>\nStock has been updated.`
+  );
+}
+
+// ── Update cake stock ─────────────────────────────────────────────
+async function updateCakeStock(itemName, qty) {
+  try {
+    const allIngs = await dbGet('ingredients?order=name');
+    if (!Array.isArray(allIngs)) return;
+    const ing = allIngs.find(i => i.name.toLowerCase() === itemName.toLowerCase());
+    if (ing) {
+      const newQty = parseFloat(ing.qty) + parseFloat(qty);
+      await dbPatch(`ingredients?id=eq.${ing.id}`, { qty: newQty });
+    }
+  } catch(e) {
+    console.error('Stock update error:', e.message);
+  }
+}
+
+// ── Morning cake stock report ─────────────────────────────────────
+async function sendCakeStockReport() {
+  const allIngs = await dbGet('ingredients?order=name');
+  if (!Array.isArray(allIngs)) return;
+
+  const cakeNames = PRODUCTION_ITEMS.map(i => i.name.toLowerCase());
+  const cakes = allIngs.filter(i => cakeNames.includes(i.name.toLowerCase()));
+
+  if (!cakes.length) return;
+
+  let msg = `🍰 <b>Cake Stock Report — ${today()}</b>\n`;
+  msg += '─────────────────────────\n';
+
+  let total = 0;
+  cakes.forEach(c => {
+    const qty = parseFloat(c.qty);
+    const min = parseFloat(c.min_qty);
+    const icon = qty <= 0 ? '🔴' : qty <= min ? '🟡' : '🟢';
+    const item = PRODUCTION_ITEMS.find(i => i.name.toLowerCase() === c.name.toLowerCase());
+    msg += `${icon} ${item?.emoji || ''} ${c.name}: <b>${qty} ${c.unit}</b>`;
+    if (qty <= 0) msg += ' — OUT';
+    else if (qty <= min) msg += ' — LOW';
+    msg += '\n';
+    total += qty;
+  });
+
+  msg += '─────────────────────────\n';
+  msg += `📦 Total pieces in stock: <b>${total}</b>`;
+
+  await send(GROUP_CHAT_ID, msg);
+}
+
+// ── Handle production callbacks ───────────────────────────────────
+async function handleProductionCallback(callbackQuery) {
+  const chatId = String(callbackQuery.message.chat.id);
+  const data = callbackQuery.data;
+  const fromName = callbackQuery.from ? callbackQuery.from.first_name : 'Unknown';
+
+  await answerCallback(callbackQuery.id);
+
+  if (data === 'prod_cancel') {
+    delete sendSessions[chatId];
+    await send(chatId, '❌ Delivery cancelled.');
+    return true;
+  }
+
+  if (data.startsWith('prod_submit_')) {
+    const source = data.replace('prod_submit_', '');
+    await submitDelivery(chatId, source, fromName);
+    return true;
+  }
+
+  if (data.startsWith('prod_main_') || data.startsWith('prod_cafe_')) {
+    const parts = data.split('_');
+    const source = parts[1];
+    const idx = parseInt(parts[2]);
+    await handleProductionItemTap(chatId, source, idx, fromName);
+    return true;
+  }
+
+  if (data.startsWith('confirm_delivery_')) {
+    const deliveryId = parseInt(data.replace('confirm_delivery_', ''));
+    await confirmDelivery(deliveryId, fromName);
+    return true;
+  }
+
+  if (data.startsWith('edit_delivery_')) {
+    const deliveryId = parseInt(data.replace('edit_delivery_', ''));
+    // Start edit session
+    sessions[chatId + '_edit'] = { deliveryId, step: 'editing', editor: fromName };
+    await send(chatId,
+      `✏️ <b>Edit delivery quantities</b>\n\nType each correction in this format:\n<code>Chocolate Cake 18</code>\n\nWhen done type <code>/done</code>`
+    );
+    return true;
+  }
+
+  if (data === 'done_edit') {
+    await send(chatId, '✅ Edits saved. Confirming delivery...');
+    return true;
+  }
+
+  return false;
+}
+
+// Export handlers for main bot to use
+global.handleProductionCallback = handleProductionCallback;
+global.startSendFlow = startSendFlow;
+global.handleSendQty = handleSendQty;
+global.sendCakeStockReport = sendCakeStockReport;
+global.sendSessions = sendSessions;
