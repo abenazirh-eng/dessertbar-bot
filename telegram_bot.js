@@ -518,6 +518,35 @@ async function poll() {
 
         console.log(`[${new Date().toISOString()}] ${fromName} (${chatId}): ${text}`);
 
+        // Check if user is in a production edit session
+        global.editSessions = global.editSessions || {};
+        if (global.editSessions[chatId] && !text.startsWith('/')) {
+          const editSess = global.editSessions[chatId];
+          if (editSess.step === 'enter_qty') {
+            const qty = parseFloat(text);
+            if (isNaN(qty) || qty <= 0) {
+              await send(chatId, '❌ Please enter a valid number');
+            } else {
+              const item = editSess.items[editSess.editingIdx];
+              // Update in DB
+              await dbPatch(`production_delivery_items?id=eq.${item.id}`, { qty_received: qty });
+              editSess.items[editSess.editingIdx].qty_sent = qty;
+              editSess.step = 'select_item';
+              // Show updated list and options
+              const rows = editSess.items.map((it, idx) => ([{
+                text: `${it.item_name} — ${it.qty_sent} ${it.unit}`,
+                callback_data: `edit_item_${idx}`
+              }]));
+              rows.push([{ text: '✅ Done editing', callback_data: 'edit_done' }]);
+              await send(chatId,
+                `✅ <b>${item.item_name}</b> updated to <b>${qty} ${item.unit}</b>\n\nEdit another item or tap Done:`,
+                { inline_keyboard: rows }
+              );
+            }
+            continue;
+          }
+        }
+
         // Check if user is in a production send session
         if (sendSessions[chatId] && !text.startsWith('/')) {
           if (sendSessions[chatId].step === 'enter_qty') {
@@ -727,7 +756,7 @@ async function submitDelivery(chatId, source, fromName) {
   // Save to DB
   const delivery = await dbPost('production_deliveries', {
     delivery_date: today(),
-    source: source === 'main' ? 'main_kitchen' : 'cafe_kitchen',
+    source: source === 'main' ? 'main_production' : 'cafe_kitchen',
     status: source === 'cafe' ? 'confirmed' : 'pending',
     delivered_by: fromName
   });
@@ -767,7 +796,7 @@ async function submitDelivery(chatId, source, fromName) {
   pendingDeliveries[deliveryId] = { items: session.items, from: fromName, deliveryId };
 
   await send(GROUP_CHAT_ID,
-    `🏭 <b>Main Kitchen Delivery</b> — sent by ${fromName}\n📅 ${today()}\n\n${itemList}\n\n<i>Cafe manager — please confirm receipt:</i>`,
+    `🏭 <b>Main Production Delivery</b> — sent by ${fromName}\n📅 ${today()}\n\n${itemList}\n\n<i>Cafe manager — please confirm receipt:</i>`,
     {
       inline_keyboard: [[
         { text: '✅ Confirm receipt', callback_data: `confirm_delivery_${deliveryId}` },
@@ -889,16 +918,49 @@ async function handleProductionCallback(callbackQuery) {
 
   if (data.startsWith('edit_delivery_')) {
     const deliveryId = parseInt(data.replace('edit_delivery_', ''));
-    // Start edit session
-    sessions[chatId + '_edit'] = { deliveryId, step: 'editing', editor: fromName };
+    // Load delivery items from DB and show as buttons to select which to edit
+    const items = await dbGet(`production_delivery_items?delivery_id=eq.${deliveryId}`);
+    if (!Array.isArray(items) || !items.length) {
+      await send(chatId, '❌ Could not load delivery items.');
+      return true;
+    }
+    // Store edit session
+    global.editSessions = global.editSessions || {};
+    global.editSessions[chatId] = { deliveryId, items, step: 'select_item', editor: fromName };
+    // Build item selection keyboard
+    const rows = items.map((item, idx) => ([{
+      text: `${item.item_name} — ${item.qty_sent} ${item.unit}`,
+      callback_data: `edit_item_${idx}`
+    }]));
+    rows.push([{ text: '✅ Done editing', callback_data: 'edit_done' }]);
     await send(chatId,
-      `✏️ <b>Edit delivery quantities</b>\n\nType each correction in this format:\n<code>Chocolate Cake 18</code>\n\nWhen done type <code>/done</code>`
+      `✏️ <b>Edit Delivery</b>\n\nWhich item do you want to edit?`,
+      { inline_keyboard: rows }
     );
     return true;
   }
 
-  if (data === 'done_edit') {
-    await send(chatId, '✅ Edits saved. Confirming delivery...');
+  if (data.startsWith('edit_item_')) {
+    global.editSessions = global.editSessions || {};
+    const editSession = global.editSessions[chatId];
+    if (!editSession) return true;
+    const idx = parseInt(data.replace('edit_item_', ''));
+    const item = editSession.items[idx];
+    editSession.editingIdx = idx;
+    editSession.step = 'enter_qty';
+    await send(chatId,
+      `✏️ <b>${item.item_name}</b>\nCurrently: <b>${item.qty_sent} ${item.unit}</b>\n\nEnter the correct quantity received:`
+    );
+    return true;
+  }
+
+  if (data === 'edit_done') {
+    global.editSessions = global.editSessions || {};
+    const editSession = global.editSessions[chatId];
+    if (!editSession) return true;
+    // Confirm delivery with edited quantities
+    await confirmDelivery(editSession.deliveryId, editSession.editor);
+    delete global.editSessions[chatId];
     return true;
   }
 
