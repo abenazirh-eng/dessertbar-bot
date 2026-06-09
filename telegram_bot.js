@@ -630,6 +630,7 @@ const PRODUCTION_ITEMS = [
   { name: 'English Cake',             emoji: '🎂', unit: 'pcs', source: 'main' },
   { name: 'Banana Bread',             emoji: '🍌', unit: 'pcs', source: 'main' },
   { name: 'Chocolate Ball',           emoji: '⚫', unit: 'pcs', source: 'main' },
+  { name: 'Strawberry Tiramisu',      emoji: '🍓', unit: 'pcs', source: 'main' },
   // Tortas - kg
   { name: 'Chocolate Cake Torta',     emoji: '🎂', unit: 'kg',  source: 'main' },
   { name: 'Blueberry Cheesecake Torta', emoji: '🫐', unit: 'kg', source: 'main' },
@@ -639,7 +640,11 @@ const PRODUCTION_ITEMS = [
   // Cafe kitchen items
   { name: 'Tiramisu in a Cup',        emoji: '☕', unit: 'pcs', source: 'cafe' },
   { name: 'Lemon Cake in a Cup',      emoji: '🍋', unit: 'pcs', source: 'cafe' },
-  { name: 'Strawberry Tiramisu',      emoji: '🍓', unit: 'pcs', source: 'cafe' },
+  { name: 'Croissant',                emoji: '🥐', unit: 'pcs', source: 'cafe' },
+  { name: 'Staff Bread',              emoji: '🍞', unit: 'pcs', source: 'cafe' },
+  { name: 'Sandwich Bread',           emoji: '🍞', unit: 'pcs', source: 'cafe' },
+  { name: 'Ciabatta',                 emoji: '🥖', unit: 'pcs', source: 'cafe' },
+  { name: 'Baguette',                 emoji: '🥖', unit: 'pcs', source: 'cafe' },
 ];
 
 // Pending deliveries waiting for confirmation: { deliveryId, items, from }
