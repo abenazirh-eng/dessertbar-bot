@@ -824,7 +824,23 @@ async function submitDelivery(chatId, source, fromName) {
 // ── Confirm delivery ──────────────────────────────────────────────
 async function confirmDelivery(deliveryId, confirmedBy) {
   const pending = pendingDeliveries[deliveryId];
-  if (!pending) {
+  // Check if edit session has updated quantities
+  global.editSessions = global.editSessions || {};
+  const editSession = Object.values(global.editSessions).find(s => s.deliveryId === deliveryId);
+
+  if (editSession) {
+    // Use edited quantities
+    for (const item of editSession.items) {
+      await updateCakeStock(item.item_name, item.qty_sent);
+    }
+    // Update DB quantities if not from memory
+    for (const item of editSession.items) {
+      if (!item.fromMemory && item.id) {
+        await dbPatch(`production_delivery_items?id=eq.${item.id}`, { qty_received: item.qty_sent });
+      }
+    }
+    delete global.editSessions[Object.keys(global.editSessions).find(k => global.editSessions[k].deliveryId === deliveryId)];
+  } else if (!pending) {
     // Load from DB
     const items = await dbGet(`production_delivery_items?delivery_id=eq.${deliveryId}`);
     if (!Array.isArray(items)) return;
@@ -931,16 +947,33 @@ async function handleProductionCallback(callbackQuery) {
 
   if (data.startsWith('edit_delivery_')) {
     const deliveryId = parseInt(data.replace('edit_delivery_', ''));
-    // Load delivery items from DB and show as buttons to select which to edit
-    const items = await dbGet(`production_delivery_items?delivery_id=eq.${deliveryId}`);
-    if (!Array.isArray(items) || !items.length) {
+    global.editSessions = global.editSessions || {};
+
+    // Try memory first, then DB
+    let items = [];
+    const pending = pendingDeliveries[deliveryId];
+    if (pending && pending.items) {
+      // Convert from memory format to edit format
+      items = pending.items.map((item, idx) => ({
+        id: idx, // use index as fake id for memory items
+        item_name: item.name,
+        qty_sent: item.qty,
+        unit: item.unit,
+        fromMemory: true
+      }));
+    } else {
+      // Load from DB
+      const dbItems = await dbGet(`production_delivery_items?delivery_id=eq.${deliveryId}`);
+      if (Array.isArray(dbItems)) items = dbItems;
+    }
+
+    if (!items.length) {
       await send(chatId, '❌ Could not load delivery items.');
       return true;
     }
-    // Store edit session
-    global.editSessions = global.editSessions || {};
+
     global.editSessions[chatId] = { deliveryId, items, step: 'select_item', editor: fromName };
-    // Build item selection keyboard
+
     const rows = items.map((item, idx) => ([{
       text: `${item.item_name} — ${item.qty_sent} ${item.unit}`,
       callback_data: `edit_item_${idx}`
