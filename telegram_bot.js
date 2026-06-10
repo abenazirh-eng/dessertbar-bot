@@ -631,6 +631,9 @@ const PRODUCTION_ITEMS = [
   { name: 'Banana Bread',             emoji: '🍌', unit: 'pcs', source: 'main' },
   { name: 'Chocolate Ball',           emoji: '⚫', unit: 'pcs', source: 'main' },
   { name: 'Strawberry Tiramisu',      emoji: '🍓', unit: 'pcs', source: 'main' },
+  { name: 'Customer Cookies',         emoji: '🍪', unit: 'kg',  source: 'main' },
+  { name: 'Fasting Brownie',          emoji: '🌱', unit: 'pcs', source: 'main' },
+  { name: 'Baked Cheesecake',         emoji: '🍰', unit: 'pcs', source: 'main' },
   // Tortas - kg
   { name: 'Chocolate Cake Torta',     emoji: '🎂', unit: 'kg',  source: 'main' },
   { name: 'Blueberry Cheesecake Torta', emoji: '🫐', unit: 'kg', source: 'main' },
@@ -871,12 +874,12 @@ async function sendCakeStockReport() {
   let total = 0;
   cakes.forEach(c => {
     const qty = parseFloat(c.qty);
+    if (qty <= 0) return; // Skip zero stock items
     const min = parseFloat(c.min_qty);
-    const icon = qty <= 0 ? '🔴' : qty <= min ? '🟡' : '🟢';
+    const icon = qty <= min ? '🟡' : '🟢';
     const item = PRODUCTION_ITEMS.find(i => i.name.toLowerCase() === c.name.toLowerCase());
     msg += `${icon} ${item?.emoji || ''} ${c.name}: <b>${qty} ${c.unit}</b>`;
-    if (qty <= 0) msg += ' — OUT';
-    else if (qty <= min) msg += ' — LOW';
+    if (qty <= min) msg += ' — LOW';
     msg += '\n';
     total += qty;
   });
