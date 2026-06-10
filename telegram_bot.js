@@ -786,14 +786,19 @@ async function submitDelivery(chatId, source, fromName) {
     });
   }
 
-  // If cafe kitchen — auto confirm and update stock
+  // If cafe kitchen — post to group for manager confirmation (same as main kitchen)
   if (source === 'cafe') {
-    for (const item of session.items) {
-      await updateCakeStock(item.name, item.qty);
-    }
     const itemList = session.items.map(i => `  ${i.emoji} ${i.name}: <b>${i.qty} ${i.unit}</b>`).join('\n');
+    pendingDeliveries[deliveryId] = { items: session.items, from: fromName, deliveryId };
+
     await send(GROUP_CHAT_ID,
-      `☕ <b>Cafe Kitchen Production</b> — logged by ${fromName}\n\n${itemList}\n\n✅ Stock updated automatically`
+      `☕ <b>Cafe Kitchen Production</b> — logged by ${fromName}\n📅 ${today()}\n\n${itemList}\n\n<i>Cafe manager — please confirm:</i>`,
+      {
+        inline_keyboard: [[
+          { text: '✅ Confirm', callback_data: `confirm_delivery_${deliveryId}` },
+          { text: '✏️ Edit quantities', callback_data: `edit_delivery_${deliveryId}` }
+        ]]
+      }
     );
     delete sendSessions[chatId];
     return;
