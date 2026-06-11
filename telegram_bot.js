@@ -42,6 +42,7 @@ const PURCHASE_ITEMS = [
   { name: 'Tuna',              emoji: '🐟', unit: 'pcs' },
   { name: 'Sausage',           emoji: '🌭', unit: 'pcs' },
   { name: 'Water',             emoji: '💧', unit: 'pcs' },
+  { name: 'Injera',            emoji: '🫓', unit: 'pcs' },
 ];
 
 // In-memory session state per user
@@ -634,6 +635,15 @@ const PRODUCTION_ITEMS = [
   { name: 'Customer Cookies',         emoji: '🍪', unit: 'kg',  source: 'main' },
   { name: 'Fasting Brownie',          emoji: '🌱', unit: 'pcs', source: 'main' },
   { name: 'Baked Cheesecake',         emoji: '🍰', unit: 'pcs', source: 'main' },
+  { name: 'Matilda Chocolate Cake',   emoji: '🍫', unit: 'pcs', source: 'main' },
+  { name: 'Walnut Brownie Cake',      emoji: '🟫', unit: 'pcs', source: 'main' },
+  { name: 'Cinnamon Roll',            emoji: '🌀', unit: 'pcs', source: 'main' },
+  { name: 'Tiramisu Biscuits',        emoji: '🍪', unit: 'pcs', source: 'main' },
+  { name: 'Chocolate Chip Cookies',   emoji: '🍪', unit: 'g',   source: 'main' },
+  { name: 'Mascarpone Cream',         emoji: '🥛', unit: 'g',   source: 'main' },
+  { name: 'Chocolate Cookies',        emoji: '🍪', unit: 'g',   source: 'main' },
+  { name: 'Butter Cookies',           emoji: '🍪', unit: 'g',   source: 'main' },
+  { name: 'Carrot Cake',              emoji: '🥕', unit: 'pcs', source: 'main' },
   // Tortas - kg
   { name: 'Chocolate Cake Torta',     emoji: '🎂', unit: 'kg',  source: 'main' },
   { name: 'Blueberry Cheesecake Torta', emoji: '🫐', unit: 'kg', source: 'main' },
@@ -648,6 +658,8 @@ const PRODUCTION_ITEMS = [
   { name: 'Sandwich Bread',           emoji: '🍞', unit: 'pcs', source: 'cafe' },
   { name: 'Ciabatta',                 emoji: '🥖', unit: 'pcs', source: 'cafe' },
   { name: 'Baguette',                 emoji: '🥖', unit: 'pcs', source: 'cafe' },
+  { name: 'Care Bread',               emoji: '🍞', unit: 'pcs', source: 'cafe' },
+  { name: 'Slider Bread',             emoji: '🍞', unit: 'pcs', source: 'cafe' },
 ];
 
 // Pending deliveries waiting for confirmation: { deliveryId, items, from }
