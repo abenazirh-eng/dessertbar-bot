@@ -653,7 +653,7 @@ const PRODUCTION_ITEMS = [
   { name: 'Oreo Mousse Torta',         emoji: '🍰', unit: 'kg',  source: 'main' },
   { name: 'Chocolate Mousse Torta',    emoji: '🍫', unit: 'kg',  source: 'main' },
   // Cafe kitchen items
-  { name: 'TIRAMISU',                  emoji: '☕', unit: 'pcs', source: 'cafe' },
+  { name: 'Tiramisu in a Cup',          emoji: '☕', unit: 'pcs', source: 'cafe' },
   { name: 'Lemon cake',                emoji: '🍋', unit: 'pcs', source: 'cafe' },
   { name: 'Croissant',                 emoji: '🥐', unit: 'pcs', source: 'cafe' },
   { name: 'Staff Bread',               emoji: '🍞', unit: 'pcs', source: 'cafe' },
