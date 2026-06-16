@@ -836,7 +836,30 @@ async function submitDelivery(chatId, source, fromName) {
 }
 
 // ── Confirm delivery ──────────────────────────────────────────────
+const confirmingDeliveries = new Set(); // in-memory lock
 async function confirmDelivery(deliveryId, confirmedBy) {
+  // LOCK 1: in-memory — block duplicate callback within same run
+  if (confirmingDeliveries.has(deliveryId)) {
+    console.log(`Delivery ${deliveryId} already being confirmed — ignoring duplicate`);
+    return;
+  }
+  confirmingDeliveries.add(deliveryId);
+
+  try {
+    // LOCK 2: database — check if already confirmed in DB
+    const existing = await dbGet(`production_deliveries?id=eq.${deliveryId}&select=status`);
+    if (Array.isArray(existing) && existing.length > 0 && existing[0].status === 'confirmed') {
+      console.log(`Delivery ${deliveryId} already confirmed in DB — skipping stock update`);
+      confirmingDeliveries.delete(deliveryId);
+      return;
+    }
+
+    // Mark as confirmed in DB IMMEDIATELY to block any second run
+    await dbPatch(`production_deliveries?id=eq.${deliveryId}`, {
+      status: 'confirmed',
+      confirmed_by: confirmedBy
+    });
+
   const pending = pendingDeliveries[deliveryId];
   // Check if edit session has updated quantities
   global.editSessions = global.editSessions || {};
@@ -868,14 +891,14 @@ async function confirmDelivery(deliveryId, confirmedBy) {
     delete pendingDeliveries[deliveryId];
   }
 
-  await dbPatch(`production_deliveries?id=eq.${deliveryId}`, {
-    status: 'confirmed',
-    confirmed_by: confirmedBy
-  });
-
-  await send(GROUP_CHAT_ID,
-    `✅ <b>Delivery confirmed by ${confirmedBy}</b>\nStock has been updated.`
-  );
+    await send(GROUP_CHAT_ID,
+      `✅ <b>Delivery confirmed by ${confirmedBy}</b>\nStock has been updated.`
+    );
+  } catch(e) {
+    console.error('confirmDelivery error:', e.message);
+  } finally {
+    confirmingDeliveries.delete(deliveryId);
+  }
 }
 
 // ── Update cake stock ─────────────────────────────────────────────
