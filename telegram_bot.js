@@ -821,16 +821,12 @@ async function confirmWastage(wasteId, confirmedBy) {
   if (confirmingWastage.has(wasteId)) return;
   confirmingWastage.add(wasteId);
   try {
-    // DB lock: skip if already confirmed
+    // DB lock: skip only if already 'stocked' (stock applied)
     const existing = await dbGet(`production_deliveries?id=eq.${wasteId}&select=status`);
-    if (Array.isArray(existing) && existing.length > 0 && existing[0].status === 'confirmed') {
+    if (Array.isArray(existing) && existing.length > 0 && existing[0].status === 'stocked') {
       confirmingWastage.delete(wasteId);
       return;
     }
-    // Mark confirmed immediately
-    await dbPatch(`production_deliveries?id=eq.${wasteId}`, {
-      status: 'confirmed', confirmed_by: confirmedBy
-    });
 
     // Deduct each item from stock
     const items = await dbGet(`production_delivery_items?delivery_id=eq.${wasteId}`);
@@ -845,6 +841,9 @@ async function confirmWastage(wasteId, confirmedBy) {
         }
       }
     }
+    await dbPatch(`production_deliveries?id=eq.${wasteId}`, {
+      status: 'stocked', confirmed_by: confirmedBy
+    });
     await send(GROUP_CHAT_ID,
       `✅ <b>Wastage confirmed by ${confirmedBy}</b>\nStock has been reduced.`
     );
@@ -1037,19 +1036,15 @@ async function confirmDelivery(deliveryId, confirmedBy) {
   confirmingDeliveries.add(deliveryId);
 
   try {
-    // LOCK 2: database — check if already confirmed in DB
+    // LOCK 2: database — check if stock was ALREADY APPLIED (status 'stocked')
+    // We use a distinct 'stocked' status to mean "stock successfully added".
+    // 'confirmed' alone does NOT block re-processing, so a failed run can recover.
     const existing = await dbGet(`production_deliveries?id=eq.${deliveryId}&select=status`);
-    if (Array.isArray(existing) && existing.length > 0 && existing[0].status === 'confirmed') {
-      console.log(`Delivery ${deliveryId} already confirmed in DB — skipping stock update`);
+    if (Array.isArray(existing) && existing.length > 0 && existing[0].status === 'stocked') {
+      console.log(`Delivery ${deliveryId} already stocked — skipping`);
       confirmingDeliveries.delete(deliveryId);
       return;
     }
-
-    // Mark as confirmed in DB IMMEDIATELY to block any second run
-    await dbPatch(`production_deliveries?id=eq.${deliveryId}`, {
-      status: 'confirmed',
-      confirmed_by: confirmedBy
-    });
 
   const pending = pendingDeliveries[deliveryId];
   // Check if edit session has updated quantities
@@ -1082,11 +1077,18 @@ async function confirmDelivery(deliveryId, confirmedBy) {
     delete pendingDeliveries[deliveryId];
   }
 
+    // Mark as 'stocked' ONLY after stock successfully updated
+    await dbPatch(`production_deliveries?id=eq.${deliveryId}`, {
+      status: 'stocked',
+      confirmed_by: confirmedBy
+    });
+
     await send(GROUP_CHAT_ID,
       `✅ <b>Delivery confirmed by ${confirmedBy}</b>\nStock has been updated.`
     );
   } catch(e) {
     console.error('confirmDelivery error:', e.message);
+    await send(GROUP_CHAT_ID, `⚠️ Error updating stock: ${e.message}. Tap confirm again.`);
   } finally {
     confirmingDeliveries.delete(deliveryId);
   }
