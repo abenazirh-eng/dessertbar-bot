@@ -633,7 +633,7 @@ const PRODUCTION_ITEMS = [
   { name: 'OREO MOUSSE CAKE',          emoji: '🍰', unit: 'pcs', source: 'main' },
   { name: 'PISTACHIO MOUSSE CAKE',     emoji: '🟢', unit: 'pcs', source: 'main' },
   { name: 'HAZELNUT MOUSSE CAKE',      emoji: '🍰', unit: 'pcs', source: 'main' },
-  { name: 'Red Velvet',                emoji: '❤️',  unit: 'pcs', source: 'main' },
+  { name: 'Red Velvet Cake',           emoji: '❤️',  unit: 'pcs', source: 'main' },
   { name: 'Brownie',                   emoji: '🟫', unit: 'pcs', source: 'main' },
   { name: 'Vegan Chocolate Cake',      emoji: '🌱', unit: 'pcs', source: 'main' },
   { name: 'FASTING CHOCOLATE BROWNIE', emoji: '🌱', unit: 'pcs', source: 'main' },
