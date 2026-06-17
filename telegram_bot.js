@@ -401,6 +401,9 @@ ${topLines}`);
   } else if (cmd === '/made') {
     await startSendFlow(chatId, fromName, 'cafe');
 
+  } else if (cmd === '/wastage') {
+    await startWastageFlow(chatId, fromName);
+
   } else if (cmd === '/cakestock') {
     await sendCakeStockReport();
 
@@ -556,6 +559,14 @@ async function poll() {
           }
         }
 
+        // Check if user is in a wastage session
+        if (wasteSessions[chatId] && !text.startsWith('/')) {
+          if (wasteSessions[chatId].step === 'enter_qty') {
+            await handleWastageQty(chatId, text);
+            continue;
+          }
+        }
+
         // Check if user is in a buy session and entering qty or price
         if (sessions[sessionKey] && !text.startsWith('/')) {
           const step = sessions[sessionKey].step;
@@ -646,6 +657,7 @@ const PRODUCTION_ITEMS = [
   { name: 'Cocunt Carrot Cake',        emoji: '🥕', unit: 'pcs', source: 'main' },
   { name: 'Chocolate Donut',           emoji: '🍩', unit: 'pcs', source: 'main' },
   { name: 'Triple Layer Chocolate Cake', emoji: '🍫', unit: 'pcs', source: 'main' },
+  { name: 'Donut Fasting',              emoji: '🍩', unit: 'pcs', source: 'main' },
   // Tortas - kg
   { name: 'Chocolate Cake Torta',      emoji: '🎂', unit: 'kg',  source: 'main' },
   { name: 'Blueberry Cheesecake Torta',emoji: '🫐', unit: 'kg',  source: 'main' },
@@ -670,6 +682,185 @@ const pendingDeliveries = {};
 const sendSessions = {};
 
 // ── Build production item keyboard ────────────────────────────────
+// ══════════════════════════════════════════════════════════════
+// WASTAGE FLOW — log spoilage/giveaways, deducts from stock
+// ══════════════════════════════════════════════════════════════
+const wasteSessions = {};
+
+async function startWastageFlow(chatId, fromName) {
+  wasteSessions[chatId] = { fromName, items: [], step: 'selecting', editingItem: null };
+  await send(chatId,
+    `🗑️ <b>Log Wastage</b>\n\nTap each item that was wasted/spoiled.\nThis will DEDUCT from stock.`,
+    buildWastageKeyboard([])
+  );
+}
+
+function buildWastageKeyboard(selectedNames = []) {
+  // All cake/pcs items from both kitchens (dedup by name)
+  const seen = new Set();
+  const items = [];
+  for (const it of PRODUCTION_ITEMS) {
+    if (seen.has(it.name)) continue;
+    seen.add(it.name);
+    items.push(it);
+  }
+  const rows = [];
+  for (let i = 0; i < items.length; i += 2) {
+    const row = [];
+    const a = items[i];
+    const aSel = selectedNames.includes(a.name);
+    row.push({ text: `${aSel ? '✅' : a.emoji} ${a.name}`, callback_data: `waste_${i}` });
+    if (items[i+1]) {
+      const b = items[i+1];
+      const bSel = selectedNames.includes(b.name);
+      row.push({ text: `${bSel ? '✅' : b.emoji} ${b.name}`, callback_data: `waste_${i+1}` });
+    }
+    rows.push(row);
+  }
+  rows.push([
+    { text: '✅ Done — Submit wastage', callback_data: 'waste_submit' },
+    { text: '❌ Cancel', callback_data: 'waste_cancel' }
+  ]);
+  return { inline_keyboard: rows };
+}
+
+function wastageItemList() {
+  const seen = new Set();
+  const items = [];
+  for (const it of PRODUCTION_ITEMS) {
+    if (seen.has(it.name)) continue;
+    seen.add(it.name);
+    items.push(it);
+  }
+  return items;
+}
+
+async function handleWastageTap(chatId, itemIdx) {
+  const session = wasteSessions[chatId];
+  if (!session) return;
+  const items = wastageItemList();
+  const item = items[itemIdx];
+  if (!item) return;
+  session.editingItem = item.name;
+  session.editingUnit = item.unit;
+  session.editingEmoji = item.emoji;
+  session.step = 'enter_qty';
+  await send(chatId, `How many <b>${item.unit}</b> of ${item.emoji} <b>${item.name}</b> were wasted?\n(Type the number)`);
+}
+
+async function handleWastageQty(chatId, text) {
+  const session = wasteSessions[chatId];
+  if (!session || session.step !== 'enter_qty') return false;
+  const qty = parseFloat(text);
+  if (isNaN(qty) || qty <= 0) {
+    await send(chatId, '❌ Please enter a valid number');
+    return true;
+  }
+  const existing = session.items.find(i => i.name === session.editingItem);
+  if (existing) existing.qty = qty;
+  else session.items.push({ name: session.editingItem, unit: session.editingUnit, emoji: session.editingEmoji, qty });
+  session.step = 'selecting';
+  session.editingItem = null;
+  const list = session.items.map(i => `  ${i.emoji} ${i.name}: <b>${i.qty} ${i.unit}</b>`).join('\n');
+  await send(chatId,
+    `✅ Added! Wastage list:\n${list}\n\nTap more or press <b>Done</b>:`,
+    buildWastageKeyboard(session.items.map(i => i.name))
+  );
+  return true;
+}
+
+async function submitWastage(chatId, fromName) {
+  const session = wasteSessions[chatId];
+  if (!session || !session.items.length) {
+    await send(chatId, '❌ No wastage items added.');
+    return;
+  }
+
+  // Save as PENDING wastage record (status pending until manager confirms)
+  const rec = await dbPost('production_deliveries', {
+    delivery_date: today(),
+    source: 'wastage',
+    status: 'pending',
+    delivered_by: fromName
+  });
+  const wasteId = rec[0]?.id;
+  if (!wasteId) {
+    await send(chatId, '❌ Error saving wastage. Try again.');
+    return;
+  }
+
+  // Save items (negative qty = deduction when confirmed)
+  for (const item of session.items) {
+    await dbPost('production_delivery_items', {
+      delivery_id: wasteId,
+      item_name: item.name,
+      qty_sent: -item.qty,
+      qty_received: -item.qty,
+      unit: item.unit
+    });
+  }
+
+  const logLines = session.items.map(i => `  ${i.emoji} ${i.name}: <b>${i.qty} ${i.unit}</b>`).join('\n');
+  pendingDeliveries[wasteId] = { items: session.items, from: fromName, deliveryId: wasteId, isWastage: true };
+
+  await send(GROUP_CHAT_ID,
+    `🗑️ <b>Wastage reported by ${fromName}</b>\n📅 ${today()}\n\n${logLines}\n\n<i>Cafe manager — please confirm this wastage:</i>`,
+    {
+      inline_keyboard: [[
+        { text: '✅ Confirm wastage', callback_data: `confirm_wastage_${wasteId}` },
+        { text: '❌ Reject', callback_data: `reject_wastage_${wasteId}` }
+      ]]
+    }
+  );
+  delete wasteSessions[chatId];
+}
+
+// ── Confirm wastage (deducts from stock) — double-lock protected ──
+const confirmingWastage = new Set();
+async function confirmWastage(wasteId, confirmedBy) {
+  if (confirmingWastage.has(wasteId)) return;
+  confirmingWastage.add(wasteId);
+  try {
+    // DB lock: skip if already confirmed
+    const existing = await dbGet(`production_deliveries?id=eq.${wasteId}&select=status`);
+    if (Array.isArray(existing) && existing.length > 0 && existing[0].status === 'confirmed') {
+      confirmingWastage.delete(wasteId);
+      return;
+    }
+    // Mark confirmed immediately
+    await dbPatch(`production_deliveries?id=eq.${wasteId}`, {
+      status: 'confirmed', confirmed_by: confirmedBy
+    });
+
+    // Deduct each item from stock
+    const items = await dbGet(`production_delivery_items?delivery_id=eq.${wasteId}`);
+    const allIngs = await dbGet('ingredients?order=name');
+    if (Array.isArray(items) && Array.isArray(allIngs)) {
+      for (const it of items) {
+        const ing = allIngs.find(i => i.name.toLowerCase() === it.item_name.toLowerCase());
+        if (ing) {
+          // qty stored negative; adding it reduces stock
+          const newQty = parseFloat(ing.qty) + parseFloat(it.qty_received);
+          await dbPatch(`ingredients?id=eq.${ing.id}`, { qty: newQty });
+        }
+      }
+    }
+    await send(GROUP_CHAT_ID,
+      `✅ <b>Wastage confirmed by ${confirmedBy}</b>\nStock has been reduced.`
+    );
+  } catch(e) {
+    console.error('confirmWastage error:', e.message);
+  } finally {
+    confirmingWastage.delete(wasteId);
+  }
+}
+
+async function rejectWastage(wasteId, rejectedBy) {
+  await dbPatch(`production_deliveries?id=eq.${wasteId}`, { status: 'rejected', confirmed_by: rejectedBy });
+  delete pendingDeliveries[wasteId];
+  await send(GROUP_CHAT_ID, `❌ <b>Wastage rejected by ${rejectedBy}</b>\nNo stock change made.`);
+}
+
 function buildProductionKeyboard(source, selectedItems = []) {
   const items = PRODUCTION_ITEMS.filter(i => i.source === source);
   const rows = [];
@@ -976,9 +1167,38 @@ async function handleProductionCallback(callbackQuery) {
     return true;
   }
 
+  if (data === 'waste_cancel') {
+    delete wasteSessions[chatId];
+    await send(chatId, '❌ Wastage cancelled.');
+    return true;
+  }
+
+  if (data === 'waste_submit') {
+    await submitWastage(chatId, fromName);
+    return true;
+  }
+
+  if (data.startsWith('waste_')) {
+    const idx = parseInt(data.replace('waste_', ''));
+    await handleWastageTap(chatId, idx);
+    return true;
+  }
+
   if (data.startsWith('confirm_delivery_')) {
     const deliveryId = parseInt(data.replace('confirm_delivery_', ''));
     await confirmDelivery(deliveryId, fromName);
+    return true;
+  }
+
+  if (data.startsWith('confirm_wastage_')) {
+    const wasteId = parseInt(data.replace('confirm_wastage_', ''));
+    await confirmWastage(wasteId, fromName);
+    return true;
+  }
+
+  if (data.startsWith('reject_wastage_')) {
+    const wasteId = parseInt(data.replace('reject_wastage_', ''));
+    await rejectWastage(wasteId, fromName);
     return true;
   }
 
