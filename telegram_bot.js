@@ -1126,20 +1126,32 @@ async function sendCakeStockReport() {
   msg += '─────────────────────────\n';
 
   let total = 0;
+  let hasNegative = false;
   cakes.forEach(c => {
     const qty = parseFloat(c.qty);
-    if (qty <= 0) return; // Skip zero stock items
+    if (qty === 0) return; // Skip exactly-zero items (but SHOW negatives)
     const min = parseFloat(c.min_qty);
-    const icon = qty <= min ? '🟡' : '🟢';
     const item = PRODUCTION_ITEMS.find(i => i.name.toLowerCase() === c.name.toLowerCase());
-    msg += `${icon} ${item?.emoji || ''} ${c.name}: <b>${qty} ${c.unit}</b>`;
-    if (qty <= min) msg += ' — LOW';
-    msg += '\n';
+    let icon, suffix = '';
+    if (qty < 0) {
+      icon = '🔴';
+      suffix = ` — ⚠️ OVERSOLD (check billing)`;
+      hasNegative = true;
+    } else if (qty <= min) {
+      icon = '🟡';
+      suffix = ' — LOW';
+    } else {
+      icon = '🟢';
+    }
+    msg += `${icon} ${item?.emoji || ''} ${c.name}: <b>${qty} ${c.unit}</b>${suffix}\n`;
     total += qty;
   });
 
   msg += '─────────────────────────\n';
   msg += `📦 Total pieces in stock: <b>${total}</b>`;
+  if (hasNegative) {
+    msg += `\n\n🔴 <i>Items showing negative were sold more than produced — usually means a new item (e.g. Triple Layer) was billed under another name. Correct manually or fix the ERP mapping.</i>`;
+  }
 
   await send(GROUP_CHAT_ID, msg);
 }
