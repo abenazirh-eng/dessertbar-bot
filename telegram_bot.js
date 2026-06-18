@@ -522,14 +522,17 @@ async function poll() {
 
         console.log(`[${new Date().toISOString()}] ${fromName} (${chatId}): ${text}`);
 
+        // A message counts as a number-entry only if it's purely numeric
+        const looksLikeNumber = /^\s*\d+(\.\d+)?\s*$/.test(text || '');
+
         // Check if user is in a production edit session
         global.editSessions = global.editSessions || {};
-        if (global.editSessions[chatId] && !text.startsWith('/')) {
+        if (global.editSessions[chatId] && !text.startsWith('/') && looksLikeNumber) {
           const editSess = global.editSessions[chatId];
           if (editSess.step === 'enter_qty') {
             const qty = parseFloat(text);
             if (isNaN(qty) || qty <= 0) {
-              await send(chatId, '❌ Please enter a valid number');
+              // ignore — not valid, let it pass as normal chat
             } else {
               const item = editSess.items[editSess.editingIdx];
               // Update in DB
@@ -551,24 +554,24 @@ async function poll() {
           }
         }
 
-        // Check if user is in a production send session
-        if (sendSessions[chatId] && !text.startsWith('/')) {
+        // Check if user is in a production send session (only if numeric)
+        if (sendSessions[chatId] && !text.startsWith('/') && looksLikeNumber) {
           if (sendSessions[chatId].step === 'enter_qty') {
             await handleSendQty(chatId, text);
             continue;
           }
         }
 
-        // Check if user is in a wastage session
-        if (wasteSessions[chatId] && !text.startsWith('/')) {
+        // Check if user is in a wastage session (only if numeric)
+        if (wasteSessions[chatId] && !text.startsWith('/') && looksLikeNumber) {
           if (wasteSessions[chatId].step === 'enter_qty') {
             await handleWastageQty(chatId, text);
             continue;
           }
         }
 
-        // Check if user is in a buy session and entering qty or price
-        if (sessions[sessionKey] && !text.startsWith('/')) {
+        // Check if user is in a buy session and entering qty or price (only if numeric)
+        if (sessions[sessionKey] && !text.startsWith('/') && looksLikeNumber) {
           const step = sessions[sessionKey].step;
           if (step === 'enter_qty') {
             await handleQtyEntered(sessionKey, text);
