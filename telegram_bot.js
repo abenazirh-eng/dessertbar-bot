@@ -708,17 +708,15 @@ function buildWastageKeyboard(selectedNames = []) {
     items.push(it);
   }
   const rows = [];
-  for (let i = 0; i < items.length; i += 2) {
-    const row = [];
-    const a = items[i];
-    const aSel = selectedNames.includes(a.name);
-    row.push({ text: `${aSel ? '✅' : a.emoji} ${a.name}`, callback_data: `waste_${i}` });
-    if (items[i+1]) {
-      const b = items[i+1];
-      const bSel = selectedNames.includes(b.name);
-      row.push({ text: `${bSel ? '✅' : b.emoji} ${b.name}`, callback_data: `waste_${i+1}` });
-    }
-    rows.push(row);
+  // One button per row + unit tag for clarity
+  for (let i = 0; i < items.length; i++) {
+    const it = items[i];
+    const sel = selectedNames.includes(it.name);
+    const tag = it.unit === 'kg' ? ' · KG' : (it.unit === 'g' ? ' · grams' : ' · pcs');
+    const check = sel ? '✅ ' : '';
+    rows.push([
+      { text: `${check}${it.emoji} ${it.name}${tag}`, callback_data: `waste_${i}` }
+    ]);
   }
   rows.push([
     { text: '✅ Done — Submit wastage', callback_data: 'waste_submit' },
@@ -866,17 +864,15 @@ async function rejectWastage(wasteId, rejectedBy) {
 function buildProductionKeyboard(source, selectedItems = []) {
   const items = PRODUCTION_ITEMS.filter(i => i.source === source);
   const rows = [];
-  for (let i = 0; i < items.length; i += 2) {
-    const row = [];
-    const a = items[i];
-    const aSelected = selectedItems.includes(i);
-    row.push({ text: `${aSelected ? '✅' : a.emoji} ${a.name}`, callback_data: `prod_${source}_${i}` });
-    if (items[i+1]) {
-      const b = items[i+1];
-      const bSelected = selectedItems.includes(i+1);
-      row.push({ text: `${bSelected ? '✅' : b.emoji} ${b.name}`, callback_data: `prod_${source}_${i+1}` });
-    }
-    rows.push(row);
+  // One button per row so full names are visible; unit tag removes pcs/kg confusion
+  for (let i = 0; i < items.length; i++) {
+    const it = items[i];
+    const selected = selectedItems.includes(i);
+    const tag = it.unit === 'kg' ? ' · KG' : (it.unit === 'g' ? ' · grams' : ' · pcs');
+    const check = selected ? '✅ ' : '';
+    rows.push([
+      { text: `${check}${it.emoji} ${it.name}${tag}`, callback_data: `prod_${source}_${i}` }
+    ]);
   }
   rows.push([
     { text: '✅ Done — Submit delivery', callback_data: `prod_submit_${source}` },
