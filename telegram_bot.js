@@ -4,7 +4,17 @@ const BOT_TOKEN = '8787023077:AAFTmxyyOIBv3DK8V3Pes7FdTQx8cU_5oJY';
 const OWNER_CHAT_ID = '986676229';
 const GROUP_CHAT_ID = '-1004290700890';
 const CONFIRM_PIN = '1234'; // Shared PIN to approve deliveries/wastage. Change as needed.
-const pinPending = {}; // chatId -> { action: 'delivery'|'wastage', id, requestedBy }
+// PIN-pad sessions keyed by messageId (the confirm message being PIN-protected)
+const pinPad = {}; // messageId -> { action, id, requestedBy, entered, chatId }
+
+function buildPinPad() {
+  return { inline_keyboard: [
+    [{text:'1',callback_data:'pin_1'},{text:'2',callback_data:'pin_2'},{text:'3',callback_data:'pin_3'}],
+    [{text:'4',callback_data:'pin_4'},{text:'5',callback_data:'pin_5'},{text:'6',callback_data:'pin_6'}],
+    [{text:'7',callback_data:'pin_7'},{text:'8',callback_data:'pin_8'},{text:'9',callback_data:'pin_9'}],
+    [{text:'⌫ Clear',callback_data:'pin_clear'},{text:'0',callback_data:'pin_0'},{text:'❌ Cancel',callback_data:'pin_cancel'}]
+  ]};
+}
 const SB_URL = 'ivhcimcudidwpnwmfvbd.supabase.co';
 const SB_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Iml2aGNpbWN1ZGlkd3Bud21mdmJkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODAzMTI0NTYsImV4cCI6MjA5NTg4ODQ1Nn0.0_rcL5LT0tpei47cIKgqPFfDivylvvP6jbUEgbzXFLE';
 
@@ -89,6 +99,28 @@ async function answerCallback(callbackQueryId, text = '') {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) }
   }, body);
+}
+
+async function editMessageText(chatId, messageId, text, keyboard = null) {
+  const payload = { chat_id: chatId, message_id: messageId, text, parse_mode: 'HTML' };
+  if (keyboard) payload.reply_markup = keyboard;
+  const body = JSON.stringify(payload);
+  return request({
+    hostname: 'api.telegram.org',
+    path: `/bot${BOT_TOKEN}/editMessageText`,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) }
+  }, body);
+}
+
+async function deleteMessage(chatId, messageId) {
+  const body = JSON.stringify({ chat_id: chatId, message_id: messageId });
+  return request({
+    hostname: 'api.telegram.org',
+    path: `/bot${BOT_TOKEN}/deleteMessage`,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) }
+  }, body).catch(()=>{});
 }
 
 async function getUpdates(offset) {
@@ -527,29 +559,6 @@ async function poll() {
         // A message counts as a number-entry only if it's purely numeric
         const looksLikeNumber = /^\s*\d+(\.\d+)?\s*$/.test(text || '');
 
-        // PIN confirmation check — if user tapped Confirm and now typing PIN
-        if (pinPending[chatId] && !text.startsWith('/')) {
-          const pend = pinPending[chatId];
-          if (text.trim() === CONFIRM_PIN) {
-            delete pinPending[chatId];
-            if (pend.action === 'delivery') {
-              await confirmDelivery(pend.id, pend.requestedBy);
-            } else if (pend.action === 'wastage') {
-              await confirmWastage(pend.id, pend.requestedBy);
-            }
-          } else {
-            // wrong PIN — only respond if it looked like a PIN attempt (4 digits)
-            if (/^\d{3,6}$/.test(text.trim())) {
-              await send(chatId, '❌ Wrong PIN. Tap Confirm again and re-enter.');
-              delete pinPending[chatId];
-            }
-            // if it's normal chat (not digits), ignore and clear so chat isn't blocked
-            else {
-              delete pinPending[chatId];
-            }
-          }
-          continue;
-        }
 
         // Check if user is in a production edit session
         global.editSessions = global.editSessions || {};
@@ -1181,6 +1190,7 @@ async function sendCakeStockReport() {
 // ── Handle production callbacks ───────────────────────────────────
 async function handleProductionCallback(callbackQuery) {
   const chatId = String(callbackQuery.message.chat.id);
+  const messageId = callbackQuery.message.message_id;
   const data = callbackQuery.data;
   const fromName = callbackQuery.from ? callbackQuery.from.first_name : 'Unknown';
 
@@ -1225,15 +1235,55 @@ async function handleProductionCallback(callbackQuery) {
 
   if (data.startsWith('confirm_delivery_')) {
     const deliveryId = parseInt(data.replace('confirm_delivery_', ''));
-    pinPending[chatId] = { action: 'delivery', id: deliveryId, requestedBy: fromName };
-    await send(chatId, `🔒 <b>Enter PIN to confirm this delivery</b>\n(Type the 4-digit PIN)`);
+    const sent = await send(chatId, `🔒 <b>Enter PIN to confirm delivery</b>\nPIN: ____`, buildPinPad());
+    const padMsgId = sent?.result?.message_id;
+    if (padMsgId) pinPad[padMsgId] = { action: 'delivery', id: deliveryId, requestedBy: fromName, entered: '', chatId };
     return true;
   }
 
   if (data.startsWith('confirm_wastage_')) {
     const wasteId = parseInt(data.replace('confirm_wastage_', ''));
-    pinPending[chatId] = { action: 'wastage', id: wasteId, requestedBy: fromName };
-    await send(chatId, `🔒 <b>Enter PIN to confirm this wastage</b>\n(Type the 4-digit PIN)`);
+    const sent = await send(chatId, `🔒 <b>Enter PIN to confirm wastage</b>\nPIN: ____`, buildPinPad());
+    const padMsgId = sent?.result?.message_id;
+    if (padMsgId) pinPad[padMsgId] = { action: 'wastage', id: wasteId, requestedBy: fromName, entered: '', chatId };
+    return true;
+  }
+
+  // PIN-pad digit taps
+  if (data.startsWith('pin_')) {
+    const action = data.replace('pin_', '');
+    const pad = pinPad[messageId];
+    if (!pad) {
+      // Pad expired/unknown — just remove it
+      await deleteMessage(chatId, messageId);
+      return true;
+    }
+    if (action === 'cancel') {
+      delete pinPad[messageId];
+      await deleteMessage(chatId, messageId);
+      return true;
+    }
+    if (action === 'clear') {
+      pad.entered = '';
+    } else if (/^\d$/.test(action)) {
+      pad.entered += action;
+    }
+    // Build masked display
+    const masked = '●'.repeat(pad.entered.length) + '_'.repeat(Math.max(0, 4 - pad.entered.length));
+    // Check when 4 digits entered
+    if (pad.entered.length >= 4) {
+      if (pad.entered === CONFIRM_PIN) {
+        delete pinPad[messageId];
+        await deleteMessage(chatId, messageId); // remove pad — nothing stays visible
+        if (pad.action === 'delivery') await confirmDelivery(pad.id, pad.requestedBy);
+        else if (pad.action === 'wastage') await confirmWastage(pad.id, pad.requestedBy);
+      } else {
+        pad.entered = '';
+        await editMessageText(chatId, messageId, `❌ <b>Wrong PIN — try again</b>\nPIN: ____`, buildPinPad());
+      }
+      return true;
+    }
+    await editMessageText(chatId, messageId, `🔒 <b>Enter PIN to confirm ${pad.action}</b>\nPIN: ${masked}`, buildPinPad());
     return true;
   }
 
