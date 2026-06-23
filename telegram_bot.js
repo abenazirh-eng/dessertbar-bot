@@ -3,6 +3,8 @@ const https = require('https');
 const BOT_TOKEN = '8787023077:AAFTmxyyOIBv3DK8V3Pes7FdTQx8cU_5oJY';
 const OWNER_CHAT_ID = '986676229';
 const GROUP_CHAT_ID = '-1004290700890';
+const CONFIRM_PIN = '1234'; // Shared PIN to approve deliveries/wastage. Change as needed.
+const pinPending = {}; // chatId -> { action: 'delivery'|'wastage', id, requestedBy }
 const SB_URL = 'ivhcimcudidwpnwmfvbd.supabase.co';
 const SB_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Iml2aGNpbWN1ZGlkd3Bud21mdmJkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODAzMTI0NTYsImV4cCI6MjA5NTg4ODQ1Nn0.0_rcL5LT0tpei47cIKgqPFfDivylvvP6jbUEgbzXFLE';
 
@@ -524,6 +526,30 @@ async function poll() {
 
         // A message counts as a number-entry only if it's purely numeric
         const looksLikeNumber = /^\s*\d+(\.\d+)?\s*$/.test(text || '');
+
+        // PIN confirmation check — if user tapped Confirm and now typing PIN
+        if (pinPending[chatId] && !text.startsWith('/')) {
+          const pend = pinPending[chatId];
+          if (text.trim() === CONFIRM_PIN) {
+            delete pinPending[chatId];
+            if (pend.action === 'delivery') {
+              await confirmDelivery(pend.id, pend.requestedBy);
+            } else if (pend.action === 'wastage') {
+              await confirmWastage(pend.id, pend.requestedBy);
+            }
+          } else {
+            // wrong PIN — only respond if it looked like a PIN attempt (4 digits)
+            if (/^\d{3,6}$/.test(text.trim())) {
+              await send(chatId, '❌ Wrong PIN. Tap Confirm again and re-enter.');
+              delete pinPending[chatId];
+            }
+            // if it's normal chat (not digits), ignore and clear so chat isn't blocked
+            else {
+              delete pinPending[chatId];
+            }
+          }
+          continue;
+        }
 
         // Check if user is in a production edit session
         global.editSessions = global.editSessions || {};
@@ -1199,13 +1225,15 @@ async function handleProductionCallback(callbackQuery) {
 
   if (data.startsWith('confirm_delivery_')) {
     const deliveryId = parseInt(data.replace('confirm_delivery_', ''));
-    await confirmDelivery(deliveryId, fromName);
+    pinPending[chatId] = { action: 'delivery', id: deliveryId, requestedBy: fromName };
+    await send(chatId, `🔒 <b>Enter PIN to confirm this delivery</b>\n(Type the 4-digit PIN)`);
     return true;
   }
 
   if (data.startsWith('confirm_wastage_')) {
     const wasteId = parseInt(data.replace('confirm_wastage_', ''));
-    await confirmWastage(wasteId, fromName);
+    pinPending[chatId] = { action: 'wastage', id: wasteId, requestedBy: fromName };
+    await send(chatId, `🔒 <b>Enter PIN to confirm this wastage</b>\n(Type the 4-digit PIN)`);
     return true;
   }
 
