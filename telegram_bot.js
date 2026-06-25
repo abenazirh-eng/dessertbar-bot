@@ -438,6 +438,9 @@ ${topLines}`);
   } else if (cmd === '/wastage') {
     await startWastageFlow(chatId, fromName);
 
+  } else if (cmd === '/chatid') {
+    await send(chatId, `🆔 This group's chat ID is:\n<code>${chatId}</code>`);
+
   } else if (cmd === '/cakestock') {
     await sendCakeStockReport();
 
