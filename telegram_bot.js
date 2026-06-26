@@ -428,10 +428,35 @@ async function handleIngredientQty(chatId, text) {
   const amount = parseFloat(text);
   if (isNaN(amount) || amount <= 0) return true; // ignore non-numbers (normal chat passes)
 
+  // Store the entered amount and show a Confirm / Edit summary (no apply yet)
+  session.amount = amount;
+  session.step = 'confirm';
+
+  const labels = {
+    buystore: `🏪 Buy to STORE`,
+    issue:    `➡️ Issue STORE → CAFÉ`,
+    buycafe:  `☕ Buy direct to CAFÉ`
+  };
+  const sent = await send(chatId,
+    `${session.emoji} <b>${session.ingName}</b>\n${labels[session.action]}\n\n` +
+    `Amount: <b>${amount} ${session.buyUnit}</b>\n\n` +
+    `<i>Manager — check for damaged goods. Confirm or edit the quantity:</i>`,
+    { inline_keyboard: [[
+        { text: '✅ Confirm', callback_data: 'ingconfirm' },
+        { text: '✏️ Edit qty', callback_data: 'ingedit' }
+    ]]}
+  );
+  session.confirmMsgId = sent?.result?.message_id || null;
+  return true;
+}
+
+// Apply the ingredient transaction (called after PIN success)
+async function applyIngredientTransaction(chatId, session) {
+  const amount = session.amount;
   const converted = amount * session.factor; // kg->g or L->ml
   const ings = await dbGet(`ingredients?name=eq.${encodeURIComponent(session.ingName)}`);
   const ing = Array.isArray(ings) && ings[0];
-  if (!ing) { await send(chatId, '❌ Ingredient not found.'); delete ingSessions[chatId]; return true; }
+  if (!ing) { await send(chatId, '❌ Ingredient not found.'); return; }
 
   const store = parseFloat(ing.store_qty || 0);
   const cafe  = parseFloat(ing.cafe_qty || 0);
@@ -439,18 +464,14 @@ async function handleIngredientQty(chatId, text) {
 
   if (session.action === 'buystore') {
     newStore = store + converted;
-    summary = `🏪 Bought to store: <b>${amount} ${session.buyUnit}</b> (${converted} ${session.ingUnit})`;
+    summary = `🏪 Bought to store: <b>${amount} ${session.buyUnit}</b>`;
   } else if (session.action === 'issue') {
-    if (converted > store) {
-      await send(chatId, `⚠️ Only ${(store/session.factor).toFixed(2)} ${session.buyUnit} in store. Issue anyway? Enter a smaller amount or type the amount again.`);
-      // allow but warn — proceed with deduction (can go negative as signal)
-    }
     newStore = store - converted;
     newCafe = cafe + converted;
-    summary = `➡️ Issued store→café: <b>${amount} ${session.buyUnit}</b> (${converted} ${session.ingUnit})`;
+    summary = `➡️ Issued store→café: <b>${amount} ${session.buyUnit}</b>`;
   } else if (session.action === 'buycafe') {
     newCafe = cafe + converted;
-    summary = `☕ Bought direct to café: <b>${amount} ${session.buyUnit}</b> (${converted} ${session.ingUnit})`;
+    summary = `☕ Bought direct to café: <b>${amount} ${session.buyUnit}</b>`;
   }
 
   await dbPatch(`ingredients?id=eq.${ing.id}`, { store_qty: newStore, cafe_qty: newCafe });
@@ -460,8 +481,6 @@ async function handleIngredientQty(chatId, text) {
     `📦 Store: <b>${(newStore/session.factor).toFixed(2)} ${session.buyUnit}</b>\n` +
     `☕ Café: <b>${(newCafe/session.factor).toFixed(2)} ${session.buyUnit}</b>`
   );
-  delete ingSessions[chatId];
-  return true;
 }
 
 async function sendIngredientBalances(chatId) {
@@ -1402,6 +1421,27 @@ async function handleProductionCallback(callbackQuery) {
     return true;
   }
 
+  if (data === 'ingedit') {
+    const s = ingSessions[chatId];
+    if (s) {
+      if (s.confirmMsgId) await deleteMessage(chatId, s.confirmMsgId);
+      s.step = 'enter_qty';
+      await send(chatId, `${s.emoji} <b>${s.ingName}</b>\nEnter the corrected amount in <b>${s.buyUnit}</b>:`);
+    }
+    return true;
+  }
+
+  if (data === 'ingconfirm') {
+    const s = ingSessions[chatId];
+    if (!s) { return true; }
+    // Remove the confirm message, show PIN pad
+    if (s.confirmMsgId) await deleteMessage(chatId, s.confirmMsgId);
+    const sent = await send(chatId, `🔒 <b>Enter PIN to confirm</b>\nPIN: ____`, buildPinPad());
+    const padMsgId = sent?.result?.message_id;
+    if (padMsgId) pinPad[padMsgId] = { action: 'ingredient', chatId, entered: '', ingChatId: chatId };
+    return true;
+  }
+
   if (data.startsWith('ing_')) {
     const parts = data.split('_'); // ing_<action>_<idx>
     const action = parts[1];
@@ -1514,6 +1554,10 @@ async function handleProductionCallback(callbackQuery) {
         await deleteMessage(chatId, messageId); // remove pad — nothing stays visible
         if (pad.action === 'delivery') await confirmDelivery(pad.id, pad.requestedBy);
         else if (pad.action === 'wastage') await confirmWastage(pad.id, pad.requestedBy);
+        else if (pad.action === 'ingredient') {
+          const s = ingSessions[pad.ingChatId];
+          if (s) { await applyIngredientTransaction(pad.ingChatId, s); delete ingSessions[pad.ingChatId]; }
+        }
       } else {
         pad.entered = '';
         await editMessageText(chatId, messageId, `❌ <b>Wrong PIN — try again</b>\nPIN: ____`, buildPinPad());
