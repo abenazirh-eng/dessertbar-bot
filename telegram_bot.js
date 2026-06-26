@@ -782,14 +782,46 @@ function startScheduler() {
   }, 60000);
 }
 
+// ── Per-group command menus (scoped) ──────────────────────────────
+async function setMyCommands(commands, scopeChatId) {
+  const payload = { commands };
+  if (scopeChatId) payload.scope = { type: 'chat', chat_id: scopeChatId };
+  const body = JSON.stringify(payload);
+  return request({
+    hostname: 'api.telegram.org',
+    path: `/bot${BOT_TOKEN}/setMyCommands`,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) }
+  }, body).catch(e => console.error('setMyCommands error:', e.message));
+}
+
+async function setupGroupMenus() {
+  // Cake group menu
+  await setMyCommands([
+    { command: 'send',      description: 'Main kitchen logs a delivery' },
+    { command: 'made',      description: 'Cafe kitchen logs production' },
+    { command: 'wastage',   description: 'Log spoilage/giveaways' },
+    { command: 'cakestock', description: 'Current cake stock report' },
+    { command: 'fullstock', description: 'Full stock list' }
+  ], GROUP_CHAT_ID);
+
+  // Purchasing / ingredients group menu
+  await setMyCommands([
+    { command: 'buystore',    description: 'Buy ingredient to store' },
+    { command: 'issue',       description: 'Move store → café' },
+    { command: 'buycafe',     description: 'Buy direct to café' },
+    { command: 'ingredients', description: 'Show store + café balances' },
+    { command: 'schedule',    description: "Today's buying list" }
+  ], INGREDIENTS_GROUP_ID);
+
+  console.log('✅ Group command menus set');
+}
+
 // ── Start ─────────────────────────────────────────────────────────
 async function main() {
   console.log('🚀 The Dessert Bar Bot starting...');
-  await send(OWNER_CHAT_ID, '🚀 <b>Dessert Bar Bot is online!</b>\nType /help for commands.');
-  await send(GROUP_CHAT_ID, `🚀 <b>Dessert Bar Stock Bot updated!</b>
-
-Purchaser — tap /buy to log a purchase.
-No typing needed — just tap the buttons!`);
+  await setupGroupMenus();
+  await send(OWNER_CHAT_ID, '🚀 <b>Dessert Bar Bot is online!</b>');
   startScheduler();
   poll();
   console.log('✅ Bot running!');
