@@ -3,6 +3,7 @@ const https = require('https');
 const BOT_TOKEN = '8787023077:AAFTmxyyOIBv3DK8V3Pes7FdTQx8cU_5oJY';
 const OWNER_CHAT_ID = '986676229';
 const GROUP_CHAT_ID = '-1004290700890';
+const INGREDIENTS_GROUP_ID = '-1004374577364'; // Purchasing/ingredients group
 const CONFIRM_PIN = '1234'; // Shared PIN to approve deliveries/wastage. Change as needed.
 // PIN-pad sessions keyed by messageId (the confirm message being PIN-protected)
 const pinPad = {}; // messageId -> { action, id, requestedBy, entered, chatId }
@@ -367,6 +368,123 @@ Tap /buy to log what you purchased.`;
 }
 
 // ── Command handler ───────────────────────────────────────────────
+// ════════════════════════════════════════════════════════════════
+// INGREDIENT TRACKING (purchasing group) — store/cafe two-stage
+// ════════════════════════════════════════════════════════════════
+const ingSessions = {}; // chatId -> { action, step, ingName, ingUnit, buyUnit }
+
+// Tracked ingredients and their bulk purchase units (for kg->g, L->ml conversion)
+const TRACKED_INGREDIENTS = [
+  { name: 'Milk',             unit: 'ml', buyUnit: 'L',  factor: 1000, emoji: '🥛' },
+  { name: 'Coffee',           unit: 'g',  buyUnit: 'kg', factor: 1000, emoji: '☕' },
+  { name: 'Ice cream powder', unit: 'g',  buyUnit: 'kg', factor: 1000, emoji: '🍦' }
+];
+
+function buildIngredientKeyboard(action) {
+  const rows = TRACKED_INGREDIENTS.map((it, i) => ([
+    { text: `${it.emoji} ${it.name}`, callback_data: `ing_${action}_${i}` }
+  ]));
+  rows.push([{ text: '❌ Cancel', callback_data: 'ing_cancel' }]);
+  return { inline_keyboard: rows };
+}
+
+async function startIngredientFlow(chatId, fromName, action) {
+  // action: buystore | issue | buycafe
+  const labels = {
+    buystore: '🏪 Buy to STORE',
+    issue:    '➡️ Issue STORE → CAFÉ',
+    buycafe:  '☕ Buy direct to CAFÉ'
+  };
+  ingSessions[chatId] = { action, fromName, step: 'select', ingName: null };
+  const sent = await send(chatId,
+    `${labels[action]}\n\nWhich ingredient?`,
+    buildIngredientKeyboard(action)
+  );
+  ingSessions[chatId].menuMsgId = sent?.result?.message_id || null;
+}
+
+async function handleIngredientTap(chatId, action, idx, menuMsgId) {
+  const session = ingSessions[chatId];
+  if (!session) return;
+  const it = TRACKED_INGREDIENTS[idx];
+  if (!it) return;
+  if (menuMsgId) await deleteMessage(chatId, menuMsgId);
+  session.ingName = it.name;
+  session.ingUnit = it.unit;
+  session.buyUnit = it.buyUnit;
+  session.factor = it.factor;
+  session.emoji = it.emoji;
+  session.step = 'enter_qty';
+
+  const unitWord = (action === 'issue') ? it.buyUnit : it.buyUnit;
+  await send(chatId,
+    `${it.emoji} <b>${it.name}</b>\nEnter amount in <b>${it.buyUnit}</b>:\n(e.g. 2 means 2${it.buyUnit})`
+  );
+}
+
+async function handleIngredientQty(chatId, text) {
+  const session = ingSessions[chatId];
+  if (!session || session.step !== 'enter_qty') return false;
+  const amount = parseFloat(text);
+  if (isNaN(amount) || amount <= 0) return true; // ignore non-numbers (normal chat passes)
+
+  const converted = amount * session.factor; // kg->g or L->ml
+  const ings = await dbGet(`ingredients?name=eq.${encodeURIComponent(session.ingName)}`);
+  const ing = Array.isArray(ings) && ings[0];
+  if (!ing) { await send(chatId, '❌ Ingredient not found.'); delete ingSessions[chatId]; return true; }
+
+  const store = parseFloat(ing.store_qty || 0);
+  const cafe  = parseFloat(ing.cafe_qty || 0);
+  let newStore = store, newCafe = cafe, summary = '';
+
+  if (session.action === 'buystore') {
+    newStore = store + converted;
+    summary = `🏪 Bought to store: <b>${amount} ${session.buyUnit}</b> (${converted} ${session.ingUnit})`;
+  } else if (session.action === 'issue') {
+    if (converted > store) {
+      await send(chatId, `⚠️ Only ${(store/session.factor).toFixed(2)} ${session.buyUnit} in store. Issue anyway? Enter a smaller amount or type the amount again.`);
+      // allow but warn — proceed with deduction (can go negative as signal)
+    }
+    newStore = store - converted;
+    newCafe = cafe + converted;
+    summary = `➡️ Issued store→café: <b>${amount} ${session.buyUnit}</b> (${converted} ${session.ingUnit})`;
+  } else if (session.action === 'buycafe') {
+    newCafe = cafe + converted;
+    summary = `☕ Bought direct to café: <b>${amount} ${session.buyUnit}</b> (${converted} ${session.ingUnit})`;
+  }
+
+  await dbPatch(`ingredients?id=eq.${ing.id}`, { store_qty: newStore, cafe_qty: newCafe });
+
+  await send(INGREDIENTS_GROUP_ID,
+    `${session.emoji} <b>${session.ingName}</b> — by ${session.fromName}\n${summary}\n\n` +
+    `📦 Store: <b>${(newStore/session.factor).toFixed(2)} ${session.buyUnit}</b>\n` +
+    `☕ Café: <b>${(newCafe/session.factor).toFixed(2)} ${session.buyUnit}</b>`
+  );
+  delete ingSessions[chatId];
+  return true;
+}
+
+async function sendIngredientBalances(chatId) {
+  const ings = await dbGet('ingredients?is_tracked_ingredient=eq.true&order=name');
+  if (!Array.isArray(ings) || !ings.length) {
+    await send(chatId, '📦 No tracked ingredients yet.');
+    return;
+  }
+  let msg = '📦 <b>Ingredient Balances</b>\n─────────────────────────\n';
+  for (const i of ings) {
+    const tr = TRACKED_INGREDIENTS.find(t => t.name.toLowerCase() === i.name.toLowerCase());
+    const factor = tr ? tr.factor : 1;
+    const buyUnit = tr ? tr.buyUnit : i.unit;
+    const emoji = tr ? tr.emoji : '•';
+    const store = parseFloat(i.store_qty || 0);
+    const cafe = parseFloat(i.cafe_qty || 0);
+    msg += `${emoji} <b>${i.name}</b>\n`;
+    msg += `   🏪 Store: ${(store/factor).toFixed(2)} ${buyUnit}  (${store.toFixed(0)} ${i.unit})\n`;
+    msg += `   ☕ Café: ${(cafe/factor).toFixed(2)} ${buyUnit}  (${cafe.toFixed(0)} ${i.unit})\n\n`;
+  }
+  await send(chatId, msg);
+}
+
 async function handleCommand(chatId, text, fromName, sessionKey) {
   const cmd = text.trim().toLowerCase().split(' ')[0].split('@')[0];
 
@@ -437,6 +555,18 @@ ${topLines}`);
 
   } else if (cmd === '/wastage') {
     await startWastageFlow(chatId, fromName);
+
+  } else if (cmd === '/buystore') {
+    await startIngredientFlow(chatId, fromName, 'buystore');
+
+  } else if (cmd === '/issue') {
+    await startIngredientFlow(chatId, fromName, 'issue');
+
+  } else if (cmd === '/buycafe') {
+    await startIngredientFlow(chatId, fromName, 'buycafe');
+
+  } else if (cmd === '/ingredients') {
+    await sendIngredientBalances(chatId);
 
   } else if (cmd === '/chatid') {
     await send(chatId, `🆔 This group's chat ID is:\n<code>${chatId}</code>`);
@@ -588,6 +718,14 @@ async function poll() {
                 { inline_keyboard: rows }
               );
             }
+            continue;
+          }
+        }
+
+        // Check if user is in an ingredient session (only if numeric)
+        if (ingSessions[chatId] && !text.startsWith('/') && looksLikeNumber) {
+          if (ingSessions[chatId].step === 'enter_qty') {
+            await handleIngredientQty(chatId, text);
             continue;
           }
         }
@@ -1221,6 +1359,22 @@ async function handleProductionCallback(callbackQuery) {
   if (data === 'prod_cancel') {
     delete sendSessions[chatId];
     await send(chatId, '❌ Delivery cancelled.');
+    return true;
+  }
+
+  if (data === 'ing_cancel') {
+    const s = ingSessions[chatId];
+    if (s && s.menuMsgId) await deleteMessage(chatId, s.menuMsgId);
+    delete ingSessions[chatId];
+    await send(chatId, '❌ Cancelled.');
+    return true;
+  }
+
+  if (data.startsWith('ing_')) {
+    const parts = data.split('_'); // ing_<action>_<idx>
+    const action = parts[1];
+    const idx = parseInt(parts[2]);
+    await handleIngredientTap(chatId, action, idx, messageId);
     return true;
   }
 
