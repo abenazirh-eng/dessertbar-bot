@@ -729,11 +729,20 @@ const sendSessions = {};
 const wasteSessions = {};
 
 async function startWastageFlow(chatId, fromName) {
-  wasteSessions[chatId] = { fromName, items: [], step: 'selecting', editingItem: null };
-  await send(chatId,
-    `🗑️ <b>Log Wastage</b>\n\nTap each item that was wasted/spoiled.\nThis will DEDUCT from stock.`,
+  wasteSessions[chatId] = { fromName, items: [], step: 'selecting', editingItem: null, menuMsgId: null, listMsgId: null };
+  const sent = await send(chatId,
+    `🗑️ <b>Log Wastage</b>\n\nTap an item that was wasted/spoiled.\nThis will DEDUCT from stock.`,
     buildWastageKeyboard([])
   );
+  wasteSessions[chatId].menuMsgId = sent?.result?.message_id || null;
+}
+
+function buildWasteRunningKeyboard() {
+  return { inline_keyboard: [
+    [{ text: '➕ Add another item', callback_data: 'waste_continue' }],
+    [{ text: '✅ Done — Submit wastage', callback_data: 'waste_submit' },
+     { text: '❌ Cancel', callback_data: 'waste_cancel' }]
+  ]};
 }
 
 function buildWastageKeyboard(selectedNames = []) {
@@ -774,12 +783,14 @@ function wastageItemList() {
   return items;
 }
 
-async function handleWastageTap(chatId, itemIdx) {
+async function handleWastageTap(chatId, itemIdx, menuMsgId) {
   const session = wasteSessions[chatId];
   if (!session) return;
   const items = wastageItemList();
   const item = items[itemIdx];
   if (!item) return;
+  if (menuMsgId) await deleteMessage(chatId, menuMsgId);
+  session.menuMsgId = null;
   session.editingItem = item.name;
   session.editingUnit = item.unit;
   session.editingEmoji = item.emoji;
@@ -801,10 +812,11 @@ async function handleWastageQty(chatId, text) {
   session.step = 'selecting';
   session.editingItem = null;
   const list = session.items.map(i => `  ${i.emoji} ${i.name}: <b>${i.qty} ${i.unit}</b>`).join('\n');
-  await send(chatId,
-    `✅ Added! Wastage list:\n${list}\n\nTap more or press <b>Done</b>:`,
-    buildWastageKeyboard(session.items.map(i => i.name))
+  const sent = await send(chatId,
+    `📝 <b>Wastage list:</b>\n${list}\n\nAdd another item, or submit when done:`,
+    buildWasteRunningKeyboard()
   );
+  session.listMsgId = sent?.result?.message_id || null;
   return true;
 }
 
@@ -924,16 +936,26 @@ async function startSendFlow(chatId, fromName, source) {
   const label = source === 'main' ? '🏭 Main Kitchen' : '☕ Cafe Kitchen';
   sendSessions[chatId] = {
     source, fromName, items: [], step: 'selecting',
-    currentItemIdx: null
+    currentItemIdx: null, menuMsgId: null
   };
-  await send(chatId,
-    `${label} — <b>What are you sending?</b>\n\nTap each item you are sending:`,
+  const sent = await send(chatId,
+    `${label} — <b>What are you sending?</b>\n\nTap an item:`,
     buildProductionKeyboard(source)
   );
+  sendSessions[chatId].menuMsgId = sent?.result?.message_id || null;
+}
+
+// Build the running-list view with Continue / Done / Cancel
+function buildRunningListKeyboard(source) {
+  return { inline_keyboard: [
+    [{ text: '➕ Add another item', callback_data: `prod_continue_${source}` }],
+    [{ text: '✅ Done — Submit', callback_data: `prod_submit_${source}` },
+     { text: '❌ Cancel', callback_data: 'prod_cancel' }]
+  ]};
 }
 
 // ── Handle production item tap ────────────────────────────────────
-async function handleProductionItemTap(chatId, source, itemIdx, fromName) {
+async function handleProductionItemTap(chatId, source, itemIdx, fromName, menuMsgId) {
   const session = sendSessions[chatId];
   if (!session) return;
 
@@ -941,20 +963,15 @@ async function handleProductionItemTap(chatId, source, itemIdx, fromName) {
   const item = items[itemIdx];
   if (!item) return;
 
-  // Check if already added
-  const existing = session.items.find(i => i.name === item.name);
-  if (existing) {
-    // Ask to update qty
-    session.editingItem = item.name;
-    session.step = 'enter_qty';
-    await send(chatId, `How many <b>${item.unit}</b> of ${item.emoji} <b>${item.name}</b>?\n(Type the number)`);
-  } else {
-    session.editingItem = item.name;
-    session.editingUnit = item.unit;
-    session.editingEmoji = item.emoji;
-    session.step = 'enter_qty';
-    await send(chatId, `How many <b>${item.unit}</b> of ${item.emoji} <b>${item.name}</b>?\n(Type the number)`);
-  }
+  // Self-destruct the menu pad so the group stays clean
+  if (menuMsgId) await deleteMessage(chatId, menuMsgId);
+  session.menuMsgId = null;
+
+  session.editingItem = item.name;
+  session.editingUnit = item.unit;
+  session.editingEmoji = item.emoji;
+  session.step = 'enter_qty';
+  await send(chatId, `How many <b>${item.unit}</b> of ${item.emoji} <b>${item.name}</b>?\n(Type the number)`);
 }
 
 // ── Handle qty input for send session ────────────────────────────
@@ -984,13 +1001,15 @@ async function handleSendQty(chatId, text) {
   session.step = 'selecting';
   session.editingItem = null;
 
-  // Show updated list and keyboard
+  // Show running list with Continue / Done (menu pad stays hidden until they add another)
   const itemList = session.items.map(i => `  ${i.emoji} ${i.name}: <b>${i.qty} ${i.unit}</b>`).join('\n');
   const source = session.source;
-  await send(chatId,
-    `✅ Added! Current list:\n${itemList}\n\nTap more items or press <b>Done</b>:`,
-    buildProductionKeyboard(source)
+  const sent = await send(chatId,
+    `📝 <b>Your current list:</b>\n${itemList}\n\nAdd another item, or submit when done:`,
+    buildRunningListKeyboard(source)
   );
+  // Track this so the next 'Add another' can replace it cleanly
+  session.listMsgId = sent?.result?.message_id || null;
   return true;
 }
 
@@ -1207,7 +1226,22 @@ async function handleProductionCallback(callbackQuery) {
 
   if (data.startsWith('prod_submit_')) {
     const source = data.replace('prod_submit_', '');
+    // Clean up the running-list message before submitting
+    const sess = sendSessions[chatId];
+    if (sess && sess.listMsgId) await deleteMessage(chatId, sess.listMsgId);
     await submitDelivery(chatId, source, fromName);
+    return true;
+  }
+
+  if (data.startsWith('prod_continue_')) {
+    const source = data.replace('prod_continue_', '');
+    const sess = sendSessions[chatId];
+    if (sess) {
+      // Remove the running-list message, show the menu pad again
+      if (sess.listMsgId) { await deleteMessage(chatId, sess.listMsgId); sess.listMsgId = null; }
+      const sent = await send(chatId, `Tap an item:`, buildProductionKeyboard(source, sess.items.map(it => PRODUCTION_ITEMS.filter(p=>p.source===source).findIndex(p=>p.name===it.name)).filter(x=>x>=0)));
+      sess.menuMsgId = sent?.result?.message_id || null;
+    }
     return true;
   }
 
@@ -1215,24 +1249,38 @@ async function handleProductionCallback(callbackQuery) {
     const parts = data.split('_');
     const source = parts[1];
     const idx = parseInt(parts[2]);
-    await handleProductionItemTap(chatId, source, idx, fromName);
+    await handleProductionItemTap(chatId, source, idx, fromName, messageId);
     return true;
   }
 
   if (data === 'waste_cancel') {
+    const ws = wasteSessions[chatId];
+    if (ws && ws.listMsgId) await deleteMessage(chatId, ws.listMsgId);
     delete wasteSessions[chatId];
     await send(chatId, '❌ Wastage cancelled.');
     return true;
   }
 
+  if (data === 'waste_continue') {
+    const ws = wasteSessions[chatId];
+    if (ws) {
+      if (ws.listMsgId) { await deleteMessage(chatId, ws.listMsgId); ws.listMsgId = null; }
+      const sent = await send(chatId, `Tap an item:`, buildWastageKeyboard(ws.items.map(i=>i.name)));
+      ws.menuMsgId = sent?.result?.message_id || null;
+    }
+    return true;
+  }
+
   if (data === 'waste_submit') {
+    const ws = wasteSessions[chatId];
+    if (ws && ws.listMsgId) await deleteMessage(chatId, ws.listMsgId);
     await submitWastage(chatId, fromName);
     return true;
   }
 
   if (data.startsWith('waste_')) {
     const idx = parseInt(data.replace('waste_', ''));
-    await handleWastageTap(chatId, idx);
+    await handleWastageTap(chatId, idx, messageId);
     return true;
   }
 
