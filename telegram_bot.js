@@ -653,9 +653,10 @@ async function sendMorningReport() {
   let msg = fmtSales(data, `Yesterday (${yesterday()})`);
   if (alerts.out.length || alerts.low.length) msg += '\n\n' + fmtStock(alerts);
   await send(OWNER_CHAT_ID, msg);
-  await send(GROUP_CHAT_ID, fmtDailySchedule());
+  // Daily buying list + low-stock alerts go to the PURCHASING group
+  await send(INGREDIENTS_GROUP_ID, fmtDailySchedule());
   if (alerts.out.length || alerts.low.length) {
-    await send(GROUP_CHAT_ID, fmtStock(alerts));
+    await send(INGREDIENTS_GROUP_ID, fmtStock(alerts));
   }
 }
 
@@ -793,10 +794,12 @@ async function poll() {
 // ── Scheduler ─────────────────────────────────────────────────────
 function startScheduler() {
   setInterval(async () => {
+    // Use Addis Ababa time (UTC+3) regardless of server timezone
     const now = new Date();
-    const hhmm = `${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`;
+    const addis = new Date(now.getTime() + 3 * 60 * 60 * 1000); // shift to UTC+3
+    const hhmm = `${String(addis.getUTCHours()).padStart(2,'0')}:${String(addis.getUTCMinutes()).padStart(2,'0')}`;
     if (hhmm === '07:00') await sendCakeStockReport();
-    if (hhmm === '08:00') await sendMorningReport();
+    if (hhmm === '08:30') await sendMorningReport();
     if (hhmm === '22:00') await sendEveningReport();
   }, 60000);
 }
