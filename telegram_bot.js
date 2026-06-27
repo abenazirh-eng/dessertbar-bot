@@ -1217,7 +1217,7 @@ async function submitDelivery(chatId, source, fromName) {
   const delivery = await dbPost('production_deliveries', {
     delivery_date: today(),
     source: source === 'main' ? 'main_production' : 'cafe_kitchen',
-    status: source === 'cafe' ? 'confirmed' : 'pending',
+    status: 'pending', // both main and cafe start pending until PIN-confirmed
     delivered_by: fromName
   });
 
@@ -1636,9 +1636,13 @@ async function handleProductionCallback(callbackQuery) {
     global.editSessions = global.editSessions || {};
     const editSession = global.editSessions[chatId];
     if (!editSession) return true;
-    // Confirm delivery with edited quantities
-    await confirmDelivery(editSession.deliveryId, editSession.editor);
+    // Require PIN before confirming (same protection as the Confirm button)
+    const did = editSession.deliveryId;
+    const editor = editSession.editor;
     delete global.editSessions[chatId];
+    const sent = await send(chatId, `🔒 <b>Enter PIN to confirm delivery</b>\nPIN: ____`, buildPinPad());
+    const padMsgId = sent?.result?.message_id;
+    if (padMsgId) pinPad[padMsgId] = { action: 'delivery', id: did, requestedBy: editor, entered: '', chatId };
     return true;
   }
 
