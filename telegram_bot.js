@@ -508,7 +508,8 @@ async function handleCommand(chatId, text, fromName, sessionKey) {
   const cmd = text.trim().toLowerCase().split(' ')[0].split('@')[0];
 
   if (cmd === '/buy') {
-    await startBuyFlow(chatId, fromName, sessionKey);
+    // DISABLED — replaced by PIN-protected /buystore and /buycafe
+    await send(chatId, '⚠️ /buy is no longer used.\n\nUse <b>/buystore</b> (buy to store) or <b>/buycafe</b> (buy direct to café) in the purchasing group — both are PIN-protected.');
 
   } else if (cmd === '/schedule') {
     await send(chatId, fmtDailySchedule());
