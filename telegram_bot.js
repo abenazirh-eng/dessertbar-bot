@@ -4,7 +4,7 @@ const BOT_TOKEN = '8787023077:AAFTmxyyOIBv3DK8V3Pes7FdTQx8cU_5oJY';
 const OWNER_CHAT_ID = '986676229';
 const GROUP_CHAT_ID = '-1004290700890';
 const INGREDIENTS_GROUP_ID = '-1004374577364'; // Purchasing/ingredients group
-const CONFIRM_PIN = '1234'; // Shared PIN to approve deliveries/wastage. Change as needed.
+const CONFIRM_PIN = '2205'; // Shared PIN to approve deliveries/wastage. Change as needed.
 // PIN-pad sessions keyed by messageId (the confirm message being PIN-protected)
 const pinPad = {}; // messageId -> { action, id, requestedBy, entered, chatId }
 
