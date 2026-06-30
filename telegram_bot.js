@@ -799,7 +799,7 @@ function startScheduler() {
     const now = new Date();
     const addis = new Date(now.getTime() + 3 * 60 * 60 * 1000); // shift to UTC+3
     const hhmm = `${String(addis.getUTCHours()).padStart(2,'0')}:${String(addis.getUTCMinutes()).padStart(2,'0')}`;
-    if (hhmm === '07:00') await sendCakeStockReport();
+    // if (hhmm === '07:00') await sendCakeStockReport(); // DISABLED — use /cakestock manually
     if (hhmm === '08:30') await sendMorningReport();
     if (hhmm === '22:00') await sendEveningReport();
   }, 60000);
