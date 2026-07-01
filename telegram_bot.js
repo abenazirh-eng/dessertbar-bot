@@ -889,15 +889,9 @@ const PRODUCTION_ITEMS = [
   { name: 'Chocolate Cookies',         emoji: '🍪', unit: 'g',   source: 'main' },
   { name: 'Butter Cookies',            emoji: '🍪', unit: 'g',   source: 'main' },
   { name: 'Cocunt Carrot Cake',        emoji: '🥕', unit: 'pcs', source: 'main' },
-  { name: 'Chocolate Donut',           emoji: '🍩', unit: 'pcs', source: 'main' },
   { name: 'Triple Layer Chocolate Cake', emoji: '🍫', unit: 'pcs', source: 'main' },
   { name: 'Donut Fasting',              emoji: '🍩', unit: 'pcs', source: 'main' },
-  // Tortas - kg
-  { name: 'Chocolate Cake Torta',      emoji: '🎂', unit: 'kg',  source: 'main' },
-  { name: 'Blueberry Cheesecake Torta',emoji: '🫐', unit: 'kg',  source: 'main' },
-  { name: 'Oreo Cheesecake Torta',     emoji: '🍰', unit: 'kg',  source: 'main' },
-  { name: 'Oreo Mousse Torta',         emoji: '🍰', unit: 'kg',  source: 'main' },
-  { name: 'Chocolate Mousse Torta',    emoji: '🍫', unit: 'kg',  source: 'main' },
+  { name: 'Millefeuille',              emoji: '🥮', unit: 'pcs', source: 'main' },
   // Cafe kitchen items
   { name: 'Tiramisu in a Cup',          emoji: '☕', unit: 'pcs', source: 'cafe' },
   { name: 'Lemon cake',                emoji: '🍋', unit: 'pcs', source: 'cafe' },
