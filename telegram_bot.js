@@ -1401,8 +1401,14 @@ async function sendCakeStockReport() {
   if (hasNegative) {
     msg += `\n\n🔴 <i>Items showing negative were sold more than produced — usually means a new item (e.g. Triple Layer) was billed under another name. Correct manually or fix the ERP mapping.</i>`;
   }
+  msg += `\n\n<i>🕒 This report auto-deletes in 15 min.</i>`;
 
-  await send(GROUP_CHAT_ID, msg);
+  const sent = await send(GROUP_CHAT_ID, msg);
+  const rptMsgId = sent?.result?.message_id;
+  if (rptMsgId) {
+    // Auto-delete after 15 minutes to keep the group clean
+    setTimeout(() => { deleteMessage(GROUP_CHAT_ID, rptMsgId); }, 15 * 60 * 1000);
+  }
 }
 
 // ── Handle production callbacks ───────────────────────────────────
