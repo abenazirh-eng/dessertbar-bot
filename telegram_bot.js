@@ -377,8 +377,55 @@ const ingSessions = {}; // chatId -> { action, step, ingName, ingUnit, buyUnit }
 const TRACKED_INGREDIENTS = [
   { name: 'Milk',             unit: 'ml', buyUnit: 'L',  factor: 1000, emoji: '🥛' },
   { name: 'Coffee',           unit: 'g',  buyUnit: 'kg', factor: 1000, emoji: '☕' },
-  { name: 'Ice cream powder', unit: 'g',  buyUnit: 'kg', factor: 1000, emoji: '🍦' }
+  { name: 'Ice cream powder', unit: 'g',  buyUnit: 'kg', factor: 1000, emoji: '🍦' },
+  { name: 'Flour',            unit: 'g',  buyUnit: 'kg', factor: 1000, emoji: '🌾' },
+  { name: 'Barley flour',     unit: 'g',  buyUnit: 'kg', factor: 1000, emoji: '🌾' },
+  { name: 'Butter',           unit: 'g',  buyUnit: 'kg', factor: 1000, emoji: '🧈' }
 ];
+
+// ── Production consumption: ingredients used when items are MADE ──
+// Amounts are per 1 unit produced (grams).
+const PRODUCTION_CONSUMPTION = {
+  'Croissant':             { 'Flour': 100,   'Butter': 50 },
+  'Ciabatta':              { 'Flour': 104.2 },
+  'Care Bread':            { 'Flour': 500 },   // 1kg -> 2 kare, so 500g per kare
+  'Slider Bread':          { 'Flour': 40 },
+  'Sandwich Bread':        { 'Flour': 83.3 },
+  'Wrap Bread':            { 'Flour': 66.7 },
+  'Staff Bread':           { 'Flour': 50 },
+  'Sandwich Bread Barley': { 'Barley flour': 83.3 },
+  'Care Bread Barley':     { 'Barley flour': 500 }
+};
+
+// Deduct production ingredients from CAFE balance when items are made
+async function deductProductionIngredients(items) {
+  const lines = [];
+  // Sum needed amounts across all produced items
+  const needed = {}; // ingredientName -> grams
+  for (const it of items) {
+    const recipe = PRODUCTION_CONSUMPTION[it.item_name] || PRODUCTION_CONSUMPTION[it.name];
+    if (!recipe) continue;
+    const qty = parseFloat(it.qty_received !== undefined ? it.qty_received : it.qty);
+    if (!qty || qty <= 0) continue;
+    for (const ingName in recipe) {
+      needed[ingName] = (needed[ingName] || 0) + recipe[ingName] * qty;
+    }
+  }
+  if (!Object.keys(needed).length) return lines;
+
+  const allIngs = await dbGet('ingredients?order=name');
+  if (!Array.isArray(allIngs)) return lines;
+
+  for (const ingName in needed) {
+    const ing = allIngs.find(i => i.name.toLowerCase() === ingName.toLowerCase());
+    if (!ing) continue;
+    const used = needed[ingName];
+    const newCafe = parseFloat(ing.cafe_qty || 0) - used;
+    await dbPatch(`ingredients?id=eq.${ing.id}`, { cafe_qty: newCafe });
+    lines.push(`  ${ingName}: −${(used/1000).toFixed(2)} kg  (café now ${(newCafe/1000).toFixed(2)} kg)`);
+  }
+  return lines;
+}
 
 function buildIngredientKeyboard(action) {
   const rows = TRACKED_INGREDIENTS.map((it, i) => ([
@@ -902,6 +949,9 @@ const PRODUCTION_ITEMS = [
   { name: 'Baguette',                  emoji: '🥖', unit: 'pcs', source: 'cafe' },
   { name: 'Care Bread',                emoji: '🍞', unit: 'pcs', source: 'cafe' },
   { name: 'Slider Bread',              emoji: '🍞', unit: 'pcs', source: 'cafe' },
+  { name: 'Wrap Bread',                emoji: '🌯', unit: 'pcs', source: 'cafe' },
+  { name: 'Sandwich Bread Barley',     emoji: '🍞', unit: 'pcs', source: 'cafe' },
+  { name: 'Care Bread Barley',         emoji: '🍞', unit: 'pcs', source: 'cafe' },
 ];
 
 // Pending deliveries waiting for confirmation: { deliveryId, items, from }
@@ -1329,15 +1379,24 @@ async function confirmDelivery(deliveryId, confirmedBy) {
     delete pendingDeliveries[deliveryId];
   }
 
+    // Deduct production ingredients (flour/butter/barley) from café balance
+    let consumptionLines = [];
+    try {
+      const dItems = await dbGet(`production_delivery_items?delivery_id=eq.${deliveryId}`);
+      if (Array.isArray(dItems)) consumptionLines = await deductProductionIngredients(dItems);
+    } catch(e) { console.error('production consumption error:', e.message); }
+
     // Mark as 'stocked' ONLY after stock successfully updated
     await dbPatch(`production_deliveries?id=eq.${deliveryId}`, {
       status: 'stocked',
       confirmed_by: confirmedBy
     });
 
-    await send(GROUP_CHAT_ID,
-      `✅ <b>Delivery confirmed by ${confirmedBy}</b>\nStock has been updated.`
-    );
+    let confMsg = `✅ <b>Delivery confirmed by ${confirmedBy}</b>\nStock has been updated.`;
+    if (consumptionLines.length) {
+      confMsg += `\n\n🌾 <b>Ingredients used:</b>\n${consumptionLines.join('\n')}`;
+    }
+    await send(GROUP_CHAT_ID, confMsg);
   } catch(e) {
     console.error('confirmDelivery error:', e.message);
     await send(GROUP_CHAT_ID, `⚠️ Error updating stock: ${e.message}. Tap confirm again.`);
