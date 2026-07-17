@@ -697,15 +697,11 @@ async function handleCallback(callbackQuery) {
 // ── Scheduled reports ─────────────────────────────────────────────
 async function sendMorningReport() {
   const data = await getSalesSummary(yesterday());
-  const alerts = await getStockAlerts();
-  let msg = fmtSales(data, `Yesterday (${yesterday()})`);
-  if (alerts.out.length || alerts.low.length) msg += '\n\n' + fmtStock(alerts);
+  const msg = fmtSales(data, `Yesterday (${yesterday()})`);
   await send(OWNER_CHAT_ID, msg);
-  // Daily buying list + low-stock alerts go to the PURCHASING group
+  // Daily buying list goes to the PURCHASING group.
+  // Low-stock alerts DISABLED for now — will re-enable in final stages.
   await send(INGREDIENTS_GROUP_ID, fmtDailySchedule());
-  if (alerts.out.length || alerts.low.length) {
-    await send(INGREDIENTS_GROUP_ID, fmtStock(alerts));
-  }
 }
 
 async function sendEveningReport() {
