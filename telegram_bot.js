@@ -374,7 +374,8 @@ Tap /buy to log what you purchased.`;
 const ingSessions = {}; // chatId -> { action, step, ingName, ingUnit, buyUnit }
 
 // Tracked ingredients and their bulk purchase units (for kg->g, L->ml conversion)
-const TRACKED_INGREDIENTS = [
+// Core ingredients with automatic deduction (recipes / production consumption)
+const CORE_INGREDIENTS = [
   { name: 'Milk',             unit: 'ml', buyUnit: 'L',  factor: 1000, emoji: '🥛' },
   { name: 'Coffee',           unit: 'g',  buyUnit: 'kg', factor: 1000, emoji: '☕' },
   { name: 'Ice cream powder', unit: 'g',  buyUnit: 'kg', factor: 1000, emoji: '🍦' },
@@ -382,6 +383,142 @@ const TRACKED_INGREDIENTS = [
   { name: 'Barley flour',     unit: 'g',  buyUnit: 'kg', factor: 1000, emoji: '🌾' },
   { name: 'Butter',           unit: 'g',  buyUnit: 'kg', factor: 1000, emoji: '🧈' }
 ];
+
+// Mercato items — request & approve only, no recipes, no auto-deduction
+const MERCATO_ITEMS = [
+  { name: 'Dark Chocolate', unit: 'g', buyUnit: 'kg', factor: 1000, emoji: '🍫' },
+  { name: 'White Chocolate', unit: 'pcs', buyUnit: 'pcs', factor: 1, emoji: '🍫' },
+  { name: 'Soya Sauce Dark', unit: 'pcs', buyUnit: 'pcs', factor: 1, emoji: '🥫' },
+  { name: 'BBQ Sauce', unit: 'pcs', buyUnit: 'pcs', factor: 1, emoji: '🥫' },
+  { name: 'Pancake Syrup', unit: 'pcs', buyUnit: 'pcs', factor: 1, emoji: '🍯' },
+  { name: 'Chocolate Syrup', unit: 'pcs', buyUnit: 'pcs', factor: 1, emoji: '🍫' },
+  { name: 'Caramel Syrup', unit: 'pcs', buyUnit: 'pcs', factor: 1, emoji: '🍯' },
+  { name: 'Aceto', unit: 'pcs', buyUnit: 'pcs', factor: 1, emoji: '🥫' },
+  { name: 'Food Color Yellow', unit: 'pcs', buyUnit: 'pcs', factor: 1, emoji: '📦' },
+  { name: 'Salt Digis', unit: 'g', buyUnit: 'kg', factor: 1000, emoji: '🧂' },
+  { name: 'Tomato Paste', unit: 'pcs', buyUnit: 'pcs', factor: 1, emoji: '🥫' },
+  { name: 'Tuna', unit: 'pcs', buyUnit: 'pcs', factor: 1, emoji: '🥫' },
+  { name: 'Olive Oil', unit: 'pcs', buyUnit: 'bottle', factor: 1, emoji: '🫒' },
+  { name: 'Mushroom', unit: 'pcs', buyUnit: 'pcs', factor: 1, emoji: '🥫' },
+  { name: 'Hot Cup', unit: 'pcs', buyUnit: 'pcs', factor: 1, emoji: '🥤' },
+  { name: 'White Cup', unit: 'pcs', buyUnit: 'pcs', factor: 1, emoji: '🥤' },
+  { name: 'Juice Cup', unit: 'pcs', buyUnit: 'pcs', factor: 1, emoji: '🥤' },
+  { name: 'Customer Sugar Brown', unit: 'pcs', buyUnit: 'carton', factor: 1, emoji: '🧂' },
+  { name: 'Customer Sugar White', unit: 'pcs', buyUnit: 'carton', factor: 1, emoji: '🧂' },
+  { name: 'White Straw', unit: 'pcs', buyUnit: 'packet', factor: 1, emoji: '🥤' },
+  { name: 'Baking Paper', unit: 'pcs', buyUnit: 'pcs', factor: 1, emoji: '📦' },
+  { name: 'Kitchen Soft', unit: 'pcs', buyUnit: 'pcs', factor: 1, emoji: '🧼' },
+  { name: 'Improver', unit: 'pcs', buyUnit: 'pcs', factor: 1, emoji: '🌾' },
+  { name: 'Toilet Soft', unit: 'pcs', buyUnit: 'pcs', factor: 1, emoji: '🫒' },
+  { name: 'Customer Soft', unit: 'pcs', buyUnit: 'pcs', factor: 1, emoji: '🧼' },
+  { name: 'Window Cleaner', unit: 'pcs', buyUnit: 'bottle', factor: 1, emoji: '🧼' },
+  { name: 'Dettol', unit: 'pcs', buyUnit: 'pcs', factor: 1, emoji: '🧼' },
+  { name: 'Sponge Yeika', unit: 'pcs', buyUnit: 'pcs', factor: 1, emoji: '🧼' },
+  { name: 'Takeaway Fork', unit: 'pcs', buyUnit: 'pcs', factor: 1, emoji: '🍴' },
+  { name: 'Takeaway Spoon', unit: 'pcs', buyUnit: 'pcs', factor: 1, emoji: '🍴' },
+  { name: 'Oreo', unit: 'pcs', buyUnit: 'pcs', factor: 1, emoji: '🍫' },
+  { name: 'Garbage Bag 0.85kg', unit: 'pcs', buyUnit: 'pcs', factor: 1, emoji: '📦' },
+  { name: 'Baking Soda Powder', unit: 'pcs', buyUnit: 'pcs', factor: 1, emoji: '🌾' },
+  { name: 'Hand Soap', unit: 'ml', buyUnit: 'L', factor: 1000, emoji: '🧼' },
+  { name: 'Dish Washing Ajacks', unit: 'pcs', buyUnit: 'carton', factor: 1, emoji: '🧼' },
+  { name: 'Bleach Berekina', unit: 'ml', buyUnit: 'L', factor: 1000, emoji: '🧼' },
+  { name: 'Oche Kibe', unit: 'pcs', buyUnit: 'pcs', factor: 1, emoji: '📦' },
+  { name: 'Gelatine Powder', unit: 'pcs', buyUnit: 'pcs', factor: 1, emoji: '📦' },
+  { name: 'Glaze Cold Strawberry Powder', unit: 'g', buyUnit: 'kg', factor: 1000, emoji: '🍯' },
+  { name: 'Bakeing Paper', unit: 'pcs', buyUnit: 'pcs', factor: 1, emoji: '📦' },
+  { name: 'Yeast', unit: 'pcs', buyUnit: 'pcs', factor: 1, emoji: '🌾' },
+  { name: 'Strawberry Syrup', unit: 'pcs', buyUnit: 'pcs', factor: 1, emoji: '🍯' },
+  { name: 'Largo', unit: 'ml', buyUnit: 'L', factor: 1000, emoji: '📦' },
+  { name: 'OK Pasta', unit: 'pcs', buyUnit: 'pcs', factor: 1, emoji: '🍝' },
+  { name: 'Camomile Tea Bag', unit: 'pcs', buyUnit: 'pcs', factor: 1, emoji: '🍵' },
+  { name: 'Hot Sauce', unit: 'pcs', buyUnit: 'bottle', factor: 1, emoji: '🥫' },
+  { name: 'Rigatoni', unit: 'pcs', buyUnit: 'pcs', factor: 1, emoji: '🍝' },
+  { name: 'Telatelli', unit: 'pcs', buyUnit: 'pcs', factor: 1, emoji: '🍝' },
+  { name: 'Penne', unit: 'pcs', buyUnit: 'pcs', factor: 1, emoji: '🍝' },
+  { name: 'Sugar', unit: 'g', buyUnit: 'kg', factor: 1000, emoji: '🧂' },
+  { name: 'Corn Flour', unit: 'pcs', buyUnit: 'pcs', factor: 1, emoji: '🌾' },
+  { name: 'Staff Tea Bag', unit: 'pcs', buyUnit: 'pcs', factor: 1, emoji: '🍵' },
+  { name: 'Sugar Stick White', unit: 'pcs', buyUnit: 'carton', factor: 1, emoji: '🧂' },
+  { name: 'Sugar Stick Brown', unit: 'pcs', buyUnit: 'carton', factor: 1, emoji: '🧂' },
+  { name: 'Black Tea Bag', unit: 'pcs', buyUnit: 'pcs', factor: 1, emoji: '🍵' },
+  { name: 'Ment Tea Bag', unit: 'pcs', buyUnit: 'pcs', factor: 1, emoji: '🍵' },
+  { name: 'Green Tea', unit: 'pcs', buyUnit: 'pcs', factor: 1, emoji: '🍵' },
+  { name: 'Casheir Paper', unit: 'pcs', buyUnit: 'pcs', factor: 1, emoji: '📦' },
+  { name: 'Oil Tena', unit: 'ml', buyUnit: 'L', factor: 1000, emoji: '🫒' },
+  { name: 'Garbage Bag 0.5kg', unit: 'pcs', buyUnit: 'pcs', factor: 1, emoji: '📦' },
+  { name: 'Toilet Glove', unit: 'pcs', buyUnit: 'pcs', factor: 1, emoji: '🫒' },
+  { name: 'Hair Net', unit: 'pcs', buyUnit: 'pack', factor: 1, emoji: '🧤' },
+  { name: 'Ketchup', unit: 'ml', buyUnit: 'L', factor: 1000, emoji: '🥫' },
+  { name: 'Straw', unit: 'pcs', buyUnit: 'packet', factor: 1, emoji: '🥤' },
+  { name: 'Cocoa Powder', unit: 'g', buyUnit: 'kg', factor: 1000, emoji: '🍫' },
+  { name: 'Fast Baker', unit: 'pcs', buyUnit: 'pcs', factor: 1, emoji: '🌾' },
+  { name: 'Butter Milk', unit: 'pcs', buyUnit: 'pcs', factor: 1, emoji: '📦' },
+  { name: 'Mustured', unit: 'ml', buyUnit: 'L', factor: 1000, emoji: '🥫' },
+  { name: 'Garnnola', unit: 'pcs', buyUnit: 'pcs', factor: 1, emoji: '📦' },
+  { name: 'Honey', unit: 'pcs', buyUnit: 'pcs', factor: 1, emoji: '🍯' },
+  { name: 'Water 1L', unit: 'pcs', buyUnit: 'pcs', factor: 1, emoji: '💧' },
+  { name: 'Water Half L', unit: 'pcs', buyUnit: 'pcs', factor: 1, emoji: '💧' },
+  { name: 'Ambo Water', unit: 'pcs', buyUnit: 'pcs', factor: 1, emoji: '💧' },
+  { name: 'Sprite', unit: 'pcs', buyUnit: 'pcs', factor: 1, emoji: '💧' },
+  { name: 'Donut Box', unit: 'pcs', buyUnit: 'pcs', factor: 1, emoji: '📦' },
+  { name: 'Freegells', unit: 'pcs', buyUnit: 'packet', factor: 1, emoji: '📦' },
+  { name: 'Spreeso', unit: 'pcs', buyUnit: 'pcs', factor: 1, emoji: '📦' },
+  { name: 'Oats Taza', unit: 'g', buyUnit: 'kg', factor: 1000, emoji: '📦' },
+  { name: 'Green Tea Bag', unit: 'pcs', buyUnit: 'pcs', factor: 1, emoji: '🍵' },
+  { name: 'Cream Powder', unit: 'pcs', buyUnit: 'pcs', factor: 1, emoji: '📦' },
+  { name: 'Biscoff', unit: 'pcs', buyUnit: 'pcs', factor: 1, emoji: '🍫' },
+  { name: 'Small Vannella', unit: 'pcs', buyUnit: 'pcs', factor: 1, emoji: '📦' },
+  { name: 'Paper Bag', unit: 'pcs', buyUnit: 'pcs', factor: 1, emoji: '📦' },
+  { name: 'Salt', unit: 'g', buyUnit: 'kg', factor: 1000, emoji: '🧂' }
+];
+
+// All tracked ingredients, sorted A-Z for the menus
+const TRACKED_INGREDIENTS = [...CORE_INGREDIENTS, ...MERCATO_ITEMS]
+  .sort((a, b) => a.name.localeCompare(b.name));
+
+// ── Letter groups so the menu isn't an endless scroll ──
+const LETTER_GROUPS = [
+  { label: 'A–C', test: ch => ch >= 'A' && ch <= 'C' },
+  { label: 'D–G', test: ch => ch >= 'D' && ch <= 'G' },
+  { label: 'H–L', test: ch => ch >= 'H' && ch <= 'L' },
+  { label: 'M–P', test: ch => ch >= 'M' && ch <= 'P' },
+  { label: 'Q–S', test: ch => ch >= 'Q' && ch <= 'S' },
+  { label: 'T–Z', test: ch => ch >= 'T' && ch <= 'Z' }
+];
+
+function itemsInGroup(groupIdx) {
+  const g = LETTER_GROUPS[groupIdx];
+  if (!g) return [];
+  return TRACKED_INGREDIENTS.filter(it => g.test(it.name[0].toUpperCase()));
+}
+
+// First screen: pick a letter group
+function buildLetterGroupKeyboard(action) {
+  const rows = [];
+  for (let i = 0; i < LETTER_GROUPS.length; i += 2) {
+    const row = [];
+    for (let j = i; j < Math.min(i + 2, LETTER_GROUPS.length); j++) {
+      const count = itemsInGroup(j).length;
+      row.push({ text: `${LETTER_GROUPS[j].label}  (${count})`, callback_data: `ingg_${action}_${j}` });
+    }
+    rows.push(row);
+  }
+  rows.push([{ text: '❌ Cancel', callback_data: 'ing_cancel' }]);
+  return { inline_keyboard: rows };
+}
+
+// Second screen: items within the chosen group
+function buildGroupItemsKeyboard(action, groupIdx) {
+  const rows = itemsInGroup(groupIdx).map(it => {
+    const gi = TRACKED_INGREDIENTS.findIndex(x => x.name === it.name);
+    return [{ text: `${it.emoji} ${it.name}`, callback_data: `ing_${action}_${gi}` }];
+  });
+  rows.push([
+    { text: '⬅️ Back', callback_data: `ingback_${action}` },
+    { text: '❌ Cancel', callback_data: 'ing_cancel' }
+  ]);
+  return { inline_keyboard: rows };
+}
 
 // ── Production consumption: ingredients used when items are MADE ──
 // Amounts are per 1 unit produced (grams).
@@ -435,17 +572,18 @@ function buildIngredientKeyboard(action) {
   return { inline_keyboard: rows };
 }
 
+const ING_ACTION_LABELS = {
+  buystore: '🏪 Buy to STORE',
+  issue:    '➡️ Request / Issue STORE → CAFÉ',
+  buycafe:  '☕ Buy direct to CAFÉ'
+};
+
 async function startIngredientFlow(chatId, fromName, action) {
   // action: buystore | issue | buycafe
-  const labels = {
-    buystore: '🏪 Buy to STORE',
-    issue:    '➡️ Issue STORE → CAFÉ',
-    buycafe:  '☕ Buy direct to CAFÉ'
-  };
   ingSessions[chatId] = { action, fromName, step: 'select', ingName: null };
   const sent = await send(chatId,
-    `${labels[action]}\n\nWhich ingredient?`,
-    buildIngredientKeyboard(action)
+    `${ING_ACTION_LABELS[action]}\n\nPick a letter group:`,
+    buildLetterGroupKeyboard(action)
   );
   ingSessions[chatId].menuMsgId = sent?.result?.message_id || null;
 }
@@ -530,13 +668,21 @@ async function applyIngredientTransaction(chatId, session) {
   );
 }
 
+function fmtQty(v, factor) {
+  const n = v / factor;
+  return Number.isInteger(n) ? String(n) : n.toFixed(2);
+}
+
 async function sendIngredientBalances(chatId) {
   const ings = await dbGet('ingredients?is_tracked_ingredient=eq.true&order=name');
   if (!Array.isArray(ings) || !ings.length) {
     await send(chatId, '📦 No tracked ingredients yet.');
     return;
   }
-  let msg = '📦 <b>Ingredient Balances</b>\n─────────────────────────\n';
+  // One compact line per item, grouped A-Z, split across messages (Telegram 4096 char limit)
+  const chunks = [];
+  let msg = '📦 <b>Ingredient Balances</b>  <i>(store / café)</i>\n';
+  let lastLetter = '';
   for (const i of ings) {
     const tr = TRACKED_INGREDIENTS.find(t => t.name.toLowerCase() === i.name.toLowerCase());
     const factor = tr ? tr.factor : 1;
@@ -544,11 +690,17 @@ async function sendIngredientBalances(chatId) {
     const emoji = tr ? tr.emoji : '•';
     const store = parseFloat(i.store_qty || 0);
     const cafe = parseFloat(i.cafe_qty || 0);
-    msg += `${emoji} <b>${i.name}</b>\n`;
-    msg += `   🏪 Store: ${(store/factor).toFixed(2)} ${buyUnit}  (${store.toFixed(0)} ${i.unit})\n`;
-    msg += `   ☕ Café: ${(cafe/factor).toFixed(2)} ${buyUnit}  (${cafe.toFixed(0)} ${i.unit})\n\n`;
+
+    const letter = i.name[0].toUpperCase();
+    let block = '';
+    if (letter !== lastLetter) { block += `\n<b>— ${letter} —</b>\n`; lastLetter = letter; }
+    block += `${emoji} ${i.name}: <b>${fmtQty(store, factor)}</b> / <b>${fmtQty(cafe, factor)}</b> ${buyUnit}\n`;
+
+    if (msg.length + block.length > 3800) { chunks.push(msg); msg = ''; }
+    msg += block;
   }
-  await send(chatId, msg);
+  if (msg.trim()) chunks.push(msg);
+  for (const ch of chunks) await send(chatId, ch);
 }
 
 async function handleCommand(chatId, text, fromName, sessionKey) {
@@ -1507,6 +1659,38 @@ async function handleProductionCallback(callbackQuery) {
     const sent = await send(chatId, `🔒 <b>Enter PIN to confirm</b>\nPIN: ____`, buildPinPad());
     const padMsgId = sent?.result?.message_id;
     if (padMsgId) pinPad[padMsgId] = { action: 'ingredient', chatId, entered: '', ingChatId: chatId };
+    return true;
+  }
+
+  // Letter group chosen -> show items in that group
+  if (data.startsWith('ingg_')) {
+    const parts = data.split('_'); // ingg_<action>_<groupIdx>
+    const action = parts[1];
+    const gIdx = parseInt(parts[2]);
+    const s = ingSessions[chatId];
+    if (s) {
+      if (s.menuMsgId) { await deleteMessage(chatId, s.menuMsgId); s.menuMsgId = null; }
+      const sent = await send(chatId,
+        `${ING_ACTION_LABELS[action]}\n\n<b>${LETTER_GROUPS[gIdx].label}</b> — pick an item:`,
+        buildGroupItemsKeyboard(action, gIdx)
+      );
+      s.menuMsgId = sent?.result?.message_id || null;
+    }
+    return true;
+  }
+
+  // Back -> letter groups again
+  if (data.startsWith('ingback_')) {
+    const action = data.replace('ingback_', '');
+    const s = ingSessions[chatId];
+    if (s) {
+      if (s.menuMsgId) { await deleteMessage(chatId, s.menuMsgId); s.menuMsgId = null; }
+      const sent = await send(chatId,
+        `${ING_ACTION_LABELS[action]}\n\nPick a letter group:`,
+        buildLetterGroupKeyboard(action)
+      );
+      s.menuMsgId = sent?.result?.message_id || null;
+    }
     return true;
   }
 
