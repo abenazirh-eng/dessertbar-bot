@@ -579,8 +579,8 @@ const ING_ACTION_LABELS = {
 };
 
 async function startIngredientFlow(chatId, fromName, action) {
-  // action: buystore | issue | buycafe
-  ingSessions[chatId] = { action, fromName, step: 'select', ingName: null };
+  // action: buystore | issue | buycafe  — multi-item batch
+  ingSessions[chatId] = { action, fromName, step: 'select', items: [], current: null, menuMsgId: null, listMsgId: null };
   const sent = await send(chatId,
     `${ING_ACTION_LABELS[action]}\n\nPick a letter group:`,
     buildLetterGroupKeyboard(action)
@@ -594,14 +594,10 @@ async function handleIngredientTap(chatId, action, idx, menuMsgId) {
   const it = TRACKED_INGREDIENTS[idx];
   if (!it) return;
   if (menuMsgId) await deleteMessage(chatId, menuMsgId);
-  session.ingName = it.name;
-  session.ingUnit = it.unit;
-  session.buyUnit = it.buyUnit;
-  session.factor = it.factor;
-  session.emoji = it.emoji;
+  session.menuMsgId = null;
+  // Hold the currently-selected item pending its qty
+  session.current = { name: it.name, ingUnit: it.unit, buyUnit: it.buyUnit, factor: it.factor, emoji: it.emoji };
   session.step = 'enter_qty';
-
-  const unitWord = (action === 'issue') ? it.buyUnit : it.buyUnit;
   await send(chatId,
     `${it.emoji} <b>${it.name}</b>\nEnter amount in <b>${it.buyUnit}</b>:\n(e.g. 2 means 2${it.buyUnit})`
   );
@@ -609,62 +605,107 @@ async function handleIngredientTap(chatId, action, idx, menuMsgId) {
 
 async function handleIngredientQty(chatId, text) {
   const session = ingSessions[chatId];
-  if (!session || session.step !== 'enter_qty') return false;
+  if (!session || session.step !== 'enter_qty' || !session.current) return false;
   const amount = parseFloat(text);
-  if (isNaN(amount) || amount <= 0) return true; // ignore non-numbers (normal chat passes)
+  if (isNaN(amount) || amount <= 0) return true; // ignore non-numbers
 
-  // Store the entered amount and show a Confirm / Edit summary (no apply yet)
-  session.amount = amount;
-  session.step = 'confirm';
+  // Add/replace this item in the batch
+  const cur = session.current;
+  const existing = session.items.find(i => i.name === cur.name);
+  if (existing) existing.amount = amount;
+  else session.items.push({ ...cur, amount });
+  session.current = null;
+  session.step = 'select';
 
-  const labels = {
-    buystore: `🏪 Buy to STORE`,
-    issue:    `➡️ Issue STORE → CAFÉ`,
-    buycafe:  `☕ Buy direct to CAFÉ`
-  };
-  const sent = await send(chatId,
-    `${session.emoji} <b>${session.ingName}</b>\n${labels[session.action]}\n\n` +
-    `Amount: <b>${amount} ${session.buyUnit}</b>\n\n` +
-    `<i>Manager — check for damaged goods. Confirm or edit the quantity:</i>`,
-    { inline_keyboard: [[
-        { text: '✅ Confirm', callback_data: 'ingconfirm' },
-        { text: '✏️ Edit qty', callback_data: 'ingedit' }
-    ]]}
-  );
-  session.confirmMsgId = sent?.result?.message_id || null;
+  // Reshow the letter-group menu with a running list + Review button
+  await showIngredientRunningList(chatId, session);
   return true;
 }
 
-// Apply the ingredient transaction (called after PIN success)
+// Edit an item's qty from the review screen, then return to review
+async function handleIngredientEditQty(chatId, text) {
+  const session = ingSessions[chatId];
+  if (!session || session.step !== 'edit_qty' || session.editingIdx == null) return false;
+  const amount = parseFloat(text);
+  if (isNaN(amount) || amount <= 0) return true;
+  session.items[session.editingIdx].amount = amount;
+  session.editingIdx = null;
+  await showIngredientReview(chatId, session);
+  return true;
+}
+
+// Show the batch-so-far with letter groups + Review/Cancel
+async function showIngredientRunningList(chatId, session) {
+  if (session.listMsgId) { await deleteMessage(chatId, session.listMsgId); session.listMsgId = null; }
+  if (session.menuMsgId) { await deleteMessage(chatId, session.menuMsgId); session.menuMsgId = null; }
+  const list = session.items.map(i => `  ${i.emoji} ${i.name}: <b>${i.amount} ${i.buyUnit}</b>`).join('\n');
+  const kb = buildLetterGroupKeyboard(session.action).inline_keyboard.slice();
+  // Add Review + Cancel row (replace the default cancel-only row)
+  kb[kb.length - 1] = [
+    { text: '✅ Done — Review', callback_data: 'ingreview' },
+    { text: '❌ Cancel', callback_data: 'ing_cancel' }
+  ];
+  const sent = await send(chatId,
+    `${ING_ACTION_LABELS[session.action]}\n\n📝 <b>Added so far:</b>\n${list}\n\nPick another letter group to add more, or tap <b>✅ Done — Review</b>:`,
+    { inline_keyboard: kb }
+  );
+  session.menuMsgId = sent?.result?.message_id || null;
+}
+
+// Build the review summary with Confirm / Edit / Cancel
+async function showIngredientReview(chatId, session) {
+  if (session.menuMsgId) { await deleteMessage(chatId, session.menuMsgId); session.menuMsgId = null; }
+  if (!session.items.length) {
+    await send(chatId, '❌ No items added. Cancelled.');
+    delete ingSessions[chatId];
+    return;
+  }
+  const list = session.items.map((i, idx) => `${idx + 1}. ${i.emoji} ${i.name}: <b>${i.amount} ${i.buyUnit}</b>`).join('\n');
+  const editRows = session.items.map((i, idx) => ([
+    { text: `✏️ ${i.name} (${i.amount} ${i.buyUnit})`, callback_data: `ingedit_${idx}` }
+  ]));
+  const sent = await send(chatId,
+    `${ING_ACTION_LABELS[session.action]}\n\n📋 <b>Review batch:</b>\n${list}\n\n` +
+    `<i>Café manager — check for damaged goods. Tap an item to edit its qty, or Confirm all with PIN:</i>`,
+    { inline_keyboard: [
+        ...editRows,
+        [{ text: '✅ Confirm all (PIN)', callback_data: 'ingconfirm' }],
+        [{ text: '❌ Cancel', callback_data: 'ing_cancel' }]
+      ] }
+  );
+  session.confirmMsgId = sent?.result?.message_id || null;
+  session.step = 'review';
+}
+
+// Apply ALL items in the batch (called after PIN success)
 async function applyIngredientTransaction(chatId, session) {
-  const amount = session.amount;
-  const converted = amount * session.factor; // kg->g or L->ml
-  const ings = await dbGet(`ingredients?name=eq.${encodeURIComponent(session.ingName)}`);
-  const ing = Array.isArray(ings) && ings[0];
-  if (!ing) { await send(chatId, '❌ Ingredient not found.'); return; }
+  const allIngs = await dbGet('ingredients?order=name');
+  if (!Array.isArray(allIngs)) { await send(chatId, '❌ DB error.'); return; }
 
-  const store = parseFloat(ing.store_qty || 0);
-  const cafe  = parseFloat(ing.cafe_qty || 0);
-  let newStore = store, newCafe = cafe, summary = '';
+  const resultLines = [];
+  for (const item of session.items) {
+    const ing = allIngs.find(i => i.name.toLowerCase() === item.name.toLowerCase());
+    if (!ing) { resultLines.push(`⚠️ ${item.name}: not found`); continue; }
+    const converted = item.amount * item.factor;
+    let newStore = parseFloat(ing.store_qty || 0);
+    let newCafe  = parseFloat(ing.cafe_qty || 0);
 
-  if (session.action === 'buystore') {
-    newStore = store + converted;
-    summary = `🏪 Bought to store: <b>${amount} ${session.buyUnit}</b>`;
-  } else if (session.action === 'issue') {
-    newStore = store - converted;
-    newCafe = cafe + converted;
-    summary = `➡️ Issued store→café: <b>${amount} ${session.buyUnit}</b>`;
-  } else if (session.action === 'buycafe') {
-    newCafe = cafe + converted;
-    summary = `☕ Bought direct to café: <b>${amount} ${session.buyUnit}</b>`;
+    if (session.action === 'buystore')      { newStore += converted; }
+    else if (session.action === 'issue')    { newStore -= converted; newCafe += converted; }
+    else if (session.action === 'buycafe')  { newCafe += converted; }
+
+    await dbPatch(`ingredients?id=eq.${ing.id}`, { store_qty: newStore, cafe_qty: newCafe });
+    resultLines.push(
+      `${item.emoji} <b>${item.name}</b>: ${item.amount} ${item.buyUnit}  →  ` +
+      `🏪 ${(newStore/item.factor).toFixed(2)} / ☕ ${(newCafe/item.factor).toFixed(2)} ${item.buyUnit}`
+    );
   }
 
-  await dbPatch(`ingredients?id=eq.${ing.id}`, { store_qty: newStore, cafe_qty: newCafe });
-
+  const verb = session.action === 'buystore' ? 'Bought to store'
+             : session.action === 'issue' ? 'Issued store→café'
+             : 'Bought to café';
   await send(INGREDIENTS_GROUP_ID,
-    `${session.emoji} <b>${session.ingName}</b> — by ${session.fromName}\n${summary}\n\n` +
-    `📦 Store: <b>${(newStore/session.factor).toFixed(2)} ${session.buyUnit}</b>\n` +
-    `☕ Café: <b>${(newCafe/session.factor).toFixed(2)} ${session.buyUnit}</b>`
+    `✅ <b>${verb}</b> — by ${session.fromName}\n(approved via PIN)\n\n${resultLines.join('\n')}`
   );
 }
 
@@ -940,8 +981,13 @@ async function poll() {
 
         // Check if user is in an ingredient session (only if numeric)
         if (ingSessions[chatId] && !text.startsWith('/') && looksLikeNumber) {
-          if (ingSessions[chatId].step === 'enter_qty') {
+          const istep = ingSessions[chatId].step;
+          if (istep === 'enter_qty') {
             await handleIngredientQty(chatId, text);
+            continue;
+          }
+          if (istep === 'edit_qty') {
+            await handleIngredientEditQty(chatId, text);
             continue;
           }
         }
@@ -1635,18 +1681,33 @@ async function handleProductionCallback(callbackQuery) {
 
   if (data === 'ing_cancel') {
     const s = ingSessions[chatId];
-    if (s && s.menuMsgId) await deleteMessage(chatId, s.menuMsgId);
+    if (s) {
+      if (s.menuMsgId) await deleteMessage(chatId, s.menuMsgId);
+      if (s.confirmMsgId) await deleteMessage(chatId, s.confirmMsgId);
+      if (s.listMsgId) await deleteMessage(chatId, s.listMsgId);
+    }
     delete ingSessions[chatId];
     await send(chatId, '❌ Cancelled.');
     return true;
   }
 
-  if (data === 'ingedit') {
+  // Done adding items -> show review summary
+  if (data === 'ingreview') {
     const s = ingSessions[chatId];
-    if (s) {
-      if (s.confirmMsgId) await deleteMessage(chatId, s.confirmMsgId);
-      s.step = 'enter_qty';
-      await send(chatId, `${s.emoji} <b>${s.ingName}</b>\nEnter the corrected amount in <b>${s.buyUnit}</b>:`);
+    if (s) await showIngredientReview(chatId, s);
+    return true;
+  }
+
+  // Edit one item's qty (from review). ingedit_<index>
+  if (data.startsWith('ingedit_')) {
+    const s = ingSessions[chatId];
+    const idx = parseInt(data.replace('ingedit_', ''));
+    if (s && s.items[idx]) {
+      if (s.confirmMsgId) { await deleteMessage(chatId, s.confirmMsgId); s.confirmMsgId = null; }
+      s.editingIdx = idx;
+      s.step = 'edit_qty';
+      const it = s.items[idx];
+      await send(chatId, `${it.emoji} <b>${it.name}</b>\nEnter the corrected amount in <b>${it.buyUnit}</b>:`);
     }
     return true;
   }
@@ -1654,9 +1715,8 @@ async function handleProductionCallback(callbackQuery) {
   if (data === 'ingconfirm') {
     const s = ingSessions[chatId];
     if (!s) { return true; }
-    // Remove the confirm message, show PIN pad
     if (s.confirmMsgId) await deleteMessage(chatId, s.confirmMsgId);
-    const sent = await send(chatId, `🔒 <b>Enter PIN to confirm</b>\nPIN: ____`, buildPinPad());
+    const sent = await send(chatId, `🔒 <b>Enter PIN to approve batch</b>\nPIN: ____`, buildPinPad());
     const padMsgId = sent?.result?.message_id;
     if (padMsgId) pinPad[padMsgId] = { action: 'ingredient', chatId, entered: '', ingChatId: chatId };
     return true;
@@ -1679,17 +1739,21 @@ async function handleProductionCallback(callbackQuery) {
     return true;
   }
 
-  // Back -> letter groups again
+  // Back -> letter groups again (with running list + Review if items exist)
   if (data.startsWith('ingback_')) {
     const action = data.replace('ingback_', '');
     const s = ingSessions[chatId];
     if (s) {
-      if (s.menuMsgId) { await deleteMessage(chatId, s.menuMsgId); s.menuMsgId = null; }
-      const sent = await send(chatId,
-        `${ING_ACTION_LABELS[action]}\n\nPick a letter group:`,
-        buildLetterGroupKeyboard(action)
-      );
-      s.menuMsgId = sent?.result?.message_id || null;
+      if (s.items && s.items.length) {
+        await showIngredientRunningList(chatId, s);
+      } else {
+        if (s.menuMsgId) { await deleteMessage(chatId, s.menuMsgId); s.menuMsgId = null; }
+        const sent = await send(chatId,
+          `${ING_ACTION_LABELS[action]}\n\nPick a letter group:`,
+          buildLetterGroupKeyboard(action)
+        );
+        s.menuMsgId = sent?.result?.message_id || null;
+      }
     }
     return true;
   }
