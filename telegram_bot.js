@@ -386,6 +386,9 @@ const CORE_INGREDIENTS = [
 
 // Mercato items — request & approve only, no recipes, no auto-deduction
 const MERCATO_ITEMS = [
+  { name: 'Egg', unit: 'pcs', buyUnit: 'pcs', factor: 1, emoji: '🥚' },
+  { name: 'Beef Sausage', unit: 'pcs', buyUnit: 'pcs', factor: 1, emoji: '🌭' },
+  { name: 'Chicken Breast', unit: 'g', buyUnit: 'kg', factor: 1000, emoji: '🍗' },
   { name: 'Dark Chocolate', unit: 'g', buyUnit: 'kg', factor: 1000, emoji: '🍫' },
   { name: 'White Chocolate', unit: 'pcs', buyUnit: 'pcs', factor: 1, emoji: '🍫' },
   { name: 'Soya Sauce Dark', unit: 'pcs', buyUnit: 'pcs', factor: 1, emoji: '🥫' },
