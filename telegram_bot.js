@@ -386,6 +386,26 @@ const CORE_INGREDIENTS = [
 
 // Mercato items — request & approve only, no recipes, no auto-deduction
 const MERCATO_ITEMS = [
+  { name: 'Matcha Powder', unit: 'g', buyUnit: 'kg', factor: 1000, emoji: '🍵' },
+  { name: 'Chicken Leg', unit: 'g', buyUnit: 'kg', factor: 1000, emoji: '🍗' },
+  { name: 'Chicken Wing', unit: 'g', buyUnit: 'kg', factor: 1000, emoji: '🍗' },
+  { name: 'Tomato', unit: 'g', buyUnit: 'kg', factor: 1000, emoji: '🍅' },
+  { name: 'Onion', unit: 'g', buyUnit: 'kg', factor: 1000, emoji: '🧅' },
+  { name: 'Mango', unit: 'g', buyUnit: 'kg', factor: 1000, emoji: '🥭' },
+  { name: 'Banana', unit: 'g', buyUnit: 'kg', factor: 1000, emoji: '🍌' },
+  { name: 'Orange', unit: 'g', buyUnit: 'kg', factor: 1000, emoji: '🍊' },
+  { name: 'Lettuce', unit: 'g', buyUnit: 'kg', factor: 1000, emoji: '🥬' },
+  { name: 'Pineapple', unit: 'pcs', buyUnit: 'pcs', factor: 1, emoji: '🍍' },
+  { name: 'Strawberry', unit: 'pcs', buyUnit: 'pcs', factor: 1, emoji: '🍓' },
+  { name: 'Avocado', unit: 'g', buyUnit: 'kg', factor: 1000, emoji: '🥑' },
+  { name: 'Papaya', unit: 'g', buyUnit: 'kg', factor: 1000, emoji: '🫐' },
+  { name: 'Lemon', unit: 'g', buyUnit: 'kg', factor: 1000, emoji: '🍋' },
+  { name: 'Potato', unit: 'g', buyUnit: 'kg', factor: 1000, emoji: '🥔' },
+  { name: 'Garlic', unit: 'g', buyUnit: 'kg', factor: 1000, emoji: '🧄' },
+  { name: 'Cucumber', unit: 'g', buyUnit: 'kg', factor: 1000, emoji: '🥒' },
+  { name: 'Parsley', unit: 'pcs', buyUnit: 'pcs', factor: 1, emoji: '🌿' },
+  { name: 'Qosta', unit: 'pcs', buyUnit: 'pcs', factor: 1, emoji: '🥬' },
+  { name: 'Baro Onion', unit: 'g', buyUnit: 'kg', factor: 1000, emoji: '🧅' },
   { name: 'Egg', unit: 'pcs', buyUnit: 'pcs', factor: 1, emoji: '🥚' },
   { name: 'Beef Sausage', unit: 'pcs', buyUnit: 'pcs', factor: 1, emoji: '🌭' },
   { name: 'Chicken Breast', unit: 'g', buyUnit: 'kg', factor: 1000, emoji: '🍗' },
@@ -489,15 +509,51 @@ const LETTER_GROUPS = [
   { label: 'T–Z', test: ch => ch >= 'T' && ch <= 'Z' }
 ];
 
+// ── Category branches (Fruits, Vegetables) shown above the A-Z groups ──
+const CATEGORIES = {
+  fruits: {
+    label: '🍓 Fruits',
+    names: ['Avocado','Lemon','Papaya','Pineapple','Strawberry','Mango','Banana','Orange']
+  },
+  vegetables: {
+    label: '🥬 Vegetables',
+    names: ['Potato','Garlic','Tomato','Onion','Cucumber','Parsley','Lettuce','Qosta','Baro Onion']
+  }
+};
+
+// Names that belong to a category (excluded from the A-Z letter groups)
+const CATEGORIZED_NAMES = new Set(
+  Object.values(CATEGORIES).flatMap(cat => cat.names.map(n => n.toLowerCase()))
+);
+
+function itemsInCategory(catKey) {
+  const cat = CATEGORIES[catKey];
+  if (!cat) return [];
+  return cat.names
+    .map(n => TRACKED_INGREDIENTS.find(it => it.name.toLowerCase() === n.toLowerCase()))
+    .filter(Boolean);
+}
+
 function itemsInGroup(groupIdx) {
   const g = LETTER_GROUPS[groupIdx];
   if (!g) return [];
-  return TRACKED_INGREDIENTS.filter(it => g.test(it.name[0].toUpperCase()));
+  // Exclude categorized items so they only appear under their category branch
+  return TRACKED_INGREDIENTS.filter(it =>
+    g.test(it.name[0].toUpperCase()) && !CATEGORIZED_NAMES.has(it.name.toLowerCase())
+  );
 }
 
 // First screen: pick a letter group
 function buildLetterGroupKeyboard(action) {
   const rows = [];
+  // Category branches first (Fruits, Vegetables)
+  const catRow = [];
+  for (const key of Object.keys(CATEGORIES)) {
+    const n = itemsInCategory(key).length;
+    catRow.push({ text: `${CATEGORIES[key].label}  (${n})`, callback_data: `ingcat_${action}_${key}` });
+  }
+  rows.push(catRow);
+  // Then A-Z letter groups
   for (let i = 0; i < LETTER_GROUPS.length; i += 2) {
     const row = [];
     for (let j = i; j < Math.min(i + 2, LETTER_GROUPS.length); j++) {
@@ -507,6 +563,19 @@ function buildLetterGroupKeyboard(action) {
     rows.push(row);
   }
   rows.push([{ text: '❌ Cancel', callback_data: 'ing_cancel' }]);
+  return { inline_keyboard: rows };
+}
+
+// Items within a category
+function buildCategoryItemsKeyboard(action, catKey) {
+  const rows = itemsInCategory(catKey).map(it => {
+    const gi = TRACKED_INGREDIENTS.findIndex(x => x.name === it.name);
+    return [{ text: `${it.emoji} ${it.name}`, callback_data: `ing_${action}_${gi}` }];
+  });
+  rows.push([
+    { text: '⬅️ Back', callback_data: `ingback_${action}` },
+    { text: '❌ Cancel', callback_data: 'ing_cancel' }
+  ]);
   return { inline_keyboard: rows };
 }
 
@@ -1722,6 +1791,23 @@ async function handleProductionCallback(callbackQuery) {
     const sent = await send(chatId, `🔒 <b>Enter PIN to approve batch</b>\nPIN: ____`, buildPinPad());
     const padMsgId = sent?.result?.message_id;
     if (padMsgId) pinPad[padMsgId] = { action: 'ingredient', chatId, entered: '', ingChatId: chatId };
+    return true;
+  }
+
+  // Category branch chosen -> show items in that category
+  if (data.startsWith('ingcat_')) {
+    const parts = data.split('_'); // ingcat_<action>_<catKey>
+    const action = parts[1];
+    const catKey = parts[2];
+    const s = ingSessions[chatId];
+    if (s) {
+      if (s.menuMsgId) { await deleteMessage(chatId, s.menuMsgId); s.menuMsgId = null; }
+      const sent = await send(chatId,
+        `${ING_ACTION_LABELS[action]}\n\n<b>${CATEGORIES[catKey].label}</b> — pick an item:`,
+        buildCategoryItemsKeyboard(action, catKey)
+      );
+      s.menuMsgId = sent?.result?.message_id || null;
+    }
     return true;
   }
 
